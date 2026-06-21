@@ -33,8 +33,6 @@ def resolve_wikipedia_input(user_input):
 
 
 def lade_kategorie_mitglieder(kategorie_name, fortsetzung=None, anzahl=50):
-    """Lädt Artikel (Namespace 0, also keine Unterkategorien/Dateien) einer
-    Wikipedia-Kategorie über die MediaWiki-API list=categorymembers."""
     headers = {"User-Agent": "MeinAdvancedStreamlitBot/1.0 (Kontakt: mein_email@domain.com)"}
     params = {
         "action": "query",
@@ -810,15 +808,13 @@ if daten is not None or fehler is not None:
             else:
                 dot = Digraph(comment=daten['titel'])
                 dot.attr(rankdir='LR') 
-                dot.attr(target='_blank')  # Stellt sicher, dass Links in neuem Tab öffnen
+                dot.attr(target='_blank')
                 
-                # Hauptknoten verlinkt auf den gesamten Artikel
                 dot.node('Haupt', wrap_fuer_mindmap(daten['titel'], breite=25), 
                          style='filled', color='lightblue', shape='ellipse', URL=daten['url'])
                     
                 for i, h2 in enumerate(daten['struktur']):
                     h2_id = f"h2_{i}"
-                    # Wikipedia-Anker für H2-Überschriften bauen
                     h2_anker = urllib.parse.quote(h2['text'].replace(' ', '_'))
                     h2_url = f"{daten['url']}#{h2_anker}"
                     
@@ -828,7 +824,6 @@ if daten is not None or fehler is not None:
                     
                     for j, h3 in enumerate(h2['kinder']):
                         h3_id = f"h3_{i}_{j}"
-                        # Wikipedia-Anker für H3-Überschriften bauen
                         h3_anker = urllib.parse.quote(h3.replace(' ', '_'))
                         h3_url = f"{daten['url']}#{h3_anker}"
                         
@@ -837,15 +832,24 @@ if daten is not None or fehler is not None:
                 
                 st.graphviz_chart(dot)
                 
-                # --- EXPORT-BEREICH FÜR DIE MINDMAP ---
                 st.divider()
                 st.markdown("#### 💾 Mindmap exportieren")
-                mm_col1, mm_col2, _ = st.columns([2, 2, 6])
+                st.caption("Für den PNG/SVG-Export muss die Software 'Graphviz' auf deinem System installiert sein. Der Quellcode-Export (.dot) funktioniert immer.")
                 
-                # PNG-Export über Graphviz-Pipe
+                mm_col1, mm_col2, mm_col3 = st.columns(3)
+                
+                with mm_col1:
+                    st.download_button(
+                        label="📝 Als .dot (Quellcode) herunterladen",
+                        data=dot.source,
+                        file_name=f"Mindmap_{daten['titel'].replace(' ', '_')}.dot",
+                        mime="text/plain",
+                        use_container_width=True
+                    )
+                
                 try:
                     png_daten = dot.pipe(format='png')
-                    with mm_col1:
+                    with mm_col2:
                         st.download_button(
                             label="🖼️ Als PNG (Bild) herunterladen",
                             data=png_daten,
@@ -854,13 +858,12 @@ if daten is not None or fehler is not None:
                             use_container_width=True
                         )
                 except Exception:
-                    with mm_col1:
-                        st.error("PNG-Export nicht möglich (Lokale Graphviz-Binaries fehlen).")
+                    with mm_col2:
+                        st.error("PNG: Graphviz-Software fehlt.")
                         
-                # SVG-Export als Vektorgrafik (ideal für Skalierung)
                 try:
                     svg_daten = dot.pipe(format='svg')
-                    with mm_col2:
+                    with mm_col3:
                         st.download_button(
                             label="📊 Als SVG (Vektor) herunterladen",
                             data=svg_daten,
@@ -869,7 +872,8 @@ if daten is not None or fehler is not None:
                             use_container_width=True
                         )
                 except Exception:
-                    pass
+                    with mm_col3:
+                        st.error("SVG: Graphviz-Software fehlt.")
 
         with tab_text:
             st.subheader("Lesemodus")
@@ -957,7 +961,10 @@ if daten is not None or fehler is not None:
                 if einzelnachweise_gefiltert:
                     for ref in einzelnachweise_gefiltert[:40]:
                         rendere_quelleneintrag(ref)
-                    if len(einzelnachweise_gefiltert) > 40: st.text(f"... und {len(einzelnachweise_gefiltert)-40} weitere.")
+                    if len(einzelnachweise_gefiltert) > 40:
+                        with st.expander(f"Alle weiteren {len(einzelnachweise_gefiltert)-40} Einzelnachweise anzeigen"):
+                            for ref in einzelnachweise_gefiltert[40:]:
+                                rendere_quelleneintrag(ref)
                 elif suchbegriff: st.info("Keine Treffer.")
                 else: st.info("Keine direkten Einzelnachweise gefunden.")
                         
