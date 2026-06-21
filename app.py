@@ -466,8 +466,6 @@ def generiere_zitation(titel, url, zitierstil="Harvard"):
 
 # --- PDF-REPORT-EXPORT ---
 def erstelle_pdf_report(daten, zitierstil="Harvard"):
-    """Baut aus den extrahierten Artikeldaten einen vollständigen, in sich
-    geschlossenen PDF-Report."""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import cm
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -475,7 +473,6 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
     from reportlab.platypus import (
         SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
     )
-    from reportlab.lib.enums import TA_LEFT
 
     def esc(text):
         return xml_escape(str(text))
@@ -624,7 +621,6 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
     return puffer.getvalue()
 
 def erstelle_text_pdf(titel, text, url):
-    """Erzeugt ein PDF, das nur den reinen Fließtext im lesefreundlichen Format enthält."""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import cm
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -795,7 +791,6 @@ if daten is not None or fehler is not None:
                     else:
                         st.caption("✓ Alle Artikel dieser Kategorie sind geladen.")
 
-        # --- TABS REIHENFOLGE ANGEPASST ---
         tab_mindmap, tab_text, tab_zeitleiste, tab_galerie, tab_quellen, tab_info, tab_sprachen, tab_zitat = st.tabs([
             "🗺️ Mindmap", 
             "📄 Text",
@@ -809,24 +804,72 @@ if daten is not None or fehler is not None:
             
         with tab_mindmap:
             st.subheader("Automatische Inhalts-Struktur")
+            st.markdown("💡 *Tipp: Klicke auf die einzelnen Knoten, um direkt zum entsprechenden Wikipedia-Abschnitt zu springen.*")
             if not daten['struktur']:
                 st.info("Keine tieferen Überschriften zur Strukturierung gefunden.")
             else:
                 dot = Digraph(comment=daten['titel'])
                 dot.attr(rankdir='LR') 
+                dot.attr(target='_blank')  # Stellt sicher, dass Links in neuem Tab öffnen
+                
+                # Hauptknoten verlinkt auf den gesamten Artikel
                 dot.node('Haupt', wrap_fuer_mindmap(daten['titel'], breite=25), 
-                         style='filled', color='lightblue', shape='ellipse')
+                         style='filled', color='lightblue', shape='ellipse', URL=daten['url'])
                     
                 for i, h2 in enumerate(daten['struktur']):
                     h2_id = f"h2_{i}"
+                    # Wikipedia-Anker für H2-Überschriften bauen
+                    h2_anker = urllib.parse.quote(h2['text'].replace(' ', '_'))
+                    h2_url = f"{daten['url']}#{h2_anker}"
+                    
                     dot.node(h2_id, wrap_fuer_mindmap(h2['text'], breite=20), 
-                             style='filled', color='lightgray', shape='box')
+                             style='filled', color='lightgray', shape='box', URL=h2_url)
                     dot.edge('Haupt', h2_id)
+                    
                     for j, h3 in enumerate(h2['kinder']):
                         h3_id = f"h3_{i}_{j}"
-                        dot.node(h3_id, wrap_fuer_mindmap(h3, breite=18), shape='plaintext')
+                        # Wikipedia-Anker für H3-Überschriften bauen
+                        h3_anker = urllib.parse.quote(h3.replace(' ', '_'))
+                        h3_url = f"{daten['url']}#{h3_anker}"
+                        
+                        dot.node(h3_id, wrap_fuer_mindmap(h3, breite=18), shape='plaintext', URL=h3_url)
                         dot.edge(h2_id, h3_id)
+                
                 st.graphviz_chart(dot)
+                
+                # --- EXPORT-BEREICH FÜR DIE MINDMAP ---
+                st.divider()
+                st.markdown("#### 💾 Mindmap exportieren")
+                mm_col1, mm_col2, _ = st.columns([2, 2, 6])
+                
+                # PNG-Export über Graphviz-Pipe
+                try:
+                    png_daten = dot.pipe(format='png')
+                    with mm_col1:
+                        st.download_button(
+                            label="🖼️ Als PNG (Bild) herunterladen",
+                            data=png_daten,
+                            file_name=f"Mindmap_{daten['titel'].replace(' ', '_')}.png",
+                            mime="image/png",
+                            use_container_width=True
+                        )
+                except Exception:
+                    with mm_col1:
+                        st.error("PNG-Export nicht möglich (Lokale Graphviz-Binaries fehlen).")
+                        
+                # SVG-Export als Vektorgrafik (ideal für Skalierung)
+                try:
+                    svg_daten = dot.pipe(format='svg')
+                    with mm_col2:
+                        st.download_button(
+                            label="📊 Als SVG (Vektor) herunterladen",
+                            data=svg_daten,
+                            file_name=f"Mindmap_{daten['titel'].replace(' ', '_')}.svg",
+                            mime="image/svg+xml",
+                            use_container_width=True
+                        )
+                except Exception:
+                    pass
 
         with tab_text:
             st.subheader("Lesemodus")
@@ -841,7 +884,6 @@ if daten is not None or fehler is not None:
                     use_container_width=True
                 )
             with export_col2:
-                # PDF Text Export direkt bereitstellen
                 pdf_text_bytes = erstelle_text_pdf(daten['titel'], daten['text'], daten['url'])
                 st.download_button(
                     "📄 Als .pdf herunterladen",
@@ -853,7 +895,6 @@ if daten is not None or fehler is not None:
 
             st.divider()
 
-            # Reader Ansicht - Formatiert in HTML innerhalb von Markdown für Blocksatz und Zeilenabstand
             _, reader_col, _ = st.columns([1, 6, 1])
             with reader_col:
                 for absatz in daten['text'].split('\n\n'):
