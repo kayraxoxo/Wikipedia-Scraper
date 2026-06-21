@@ -329,9 +329,9 @@ def generiere_zitation(titel, url, zitierstil="Harvard"):
 
 
 # --- STREAMLIT UI ---
-st.set_page_config(page_title="Wiki Analyzer", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="WikiLens", page_icon="🧠", layout="wide")
 
-st.title("🧠 Wikipedia Seiten Analyzer")
+st.title("🧠 WikiLens")
 st.markdown("Suche nach einem Thema oder gib einen Link ein, um die Architektur des Artikels zu analysieren.")
 
 nutzer_eingabe = st.text_input(
