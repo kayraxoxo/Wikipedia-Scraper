@@ -4,4 +4,4 @@ streamlit
 graphviz
 datetime
 bs4
-google
+google.generativeai
