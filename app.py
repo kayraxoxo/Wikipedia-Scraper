@@ -5,20 +5,16 @@ from graphviz import Digraph
 from datetime import datetime
 import urllib.parse
 import textwrap
+import re
+import google.generativeai as genai
 
-# --- NEU: INTELLIGENTE SUCHE & URL-AUFLÖSUNG ---
+# --- INTELLIGENTE SUCHE & URL-AUFLÖSUNG ---
 def resolve_wikipedia_input(user_input):
-    """
-    Prüft, ob die Eingabe eine URL ist. Wenn nicht, nutzt es die Wikipedia OpenSearch API,
-    um den Begriff zum passenden Artikel-Link aufzulösen.
-    """
     user_input = user_input.strip()
     
-    # Fall 1: Nutzer hat direkt eine URL eingegeben
     if user_input.startswith("http://") or user_input.startswith("https://"):
         return user_input, None
     
-    # Fall 2: Nutzer hat einen Suchbegriff eingegeben
     suche_url = f"https://de.wikipedia.org/w/api.php?action=opensearch&search={urllib.parse.quote(user_input)}&limit=1&namespace=0&format=json"
     headers = {"User-Agent": "MeinAdvancedStreamlitBot/1.0 (Kontakt: mein_email@domain.com)"}
     
@@ -26,17 +22,50 @@ def resolve_wikipedia_input(user_input):
         response = requests.get(suche_url, headers=headers, timeout=5)
         if response.status_code == 200:
             data = response.json()
-            # Das Datenformat von OpenSearch ist: [Suchbegriff, [Titel], [Zusammenfassung], [URLs]]
-            # data[3] enthält die verknüpften URLs. Wenn sie nicht leer ist, haben wir einen Treffer!
             if len(data) > 3 and data[3]:
                 gefundene_url = data[3][0]
                 return gefundene_url, None
     except Exception:
         pass
         
-    # Wenn die API fehlschlägt oder die Suchliste leer ist
     return None, "Link oder Begriff konnte nicht gefunden werden"
 
+# --- FEATURE-EXTRAKTOREN (Bilder & Zeitleiste) ---
+def extrahiere_bilder(soup):
+    bilder = []
+    for a in soup.find_all('a', class_='image'):
+        img = a.find('img')
+        if img:
+            src = img.get('src') or img.get('data-src')
+            if src:
+                if src.startswith('//'):
+                    src = 'https:' + src
+                if not src.endswith('.svg') and src not in bilder:
+                    bilder.append(src)
+    return bilder[:24] 
+
+def extrahiere_zeitleiste(text):
+    zeitleiste = []
+    text_clean = re.sub(r'\[\d+\]', '', text)
+    saetze = re.split(r'(?<=[.!?]) +', text_clean)
+    
+    for satz in saetze:
+        match = re.search(r'\b(1[0-9]{3}|20[0-9]{2})\b', satz)
+        if match:
+            jahr = int(match.group(1))
+            if 30 < len(satz) < 300:
+                zeitleiste.append((jahr, satz.strip()))
+    
+    zeitleiste.sort(key=lambda x: x[0])
+    
+    gefiltert = []
+    gesehene_saetze = set()
+    for jahr, satz in zeitleiste:
+        if satz not in gesehene_saetze:
+            gefiltert.append({"jahr": jahr, "text": satz})
+            gesehene_saetze.add(satz)
+            
+    return gefiltert
 
 # --- ERWEITERTE & ULTRAROBUSTE SCRAPER LOGIK ---
 def get_traversal_start(headline_elem):
@@ -124,12 +153,10 @@ def extrahiere_sprachlinks(soup):
 def scrape_wikipedia_advanced(url):
     headers = {"User-Agent": "MeinAdvancedStreamlitBot/1.0 (Kontakt: mein_email@domain.com)"}
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=10)
         
-        # NEU: Direkte Erkennung eines 404 Fehlers für saubere Ausgabe
         if response.status_code == 404:
             return None, "Link oder Begriff konnte nicht gefunden werden"
-            
         if response.status_code != 200:
             return None, f"Fehler: Status-Code {response.status_code}"
         
@@ -198,6 +225,9 @@ def scrape_wikipedia_advanced(url):
         kategorien = extrahiere_kategorien(soup)
         siehe_auch = extrahiere_siehe_auch(alle_headlinetags)
         sprachlinks = extrahiere_sprachlinks(soup)
+        
+        bilder_urls = extrahiere_bilder(soup)
+        zeitleiste = extrahiere_zeitleiste(gesamter_text)
 
         return {
             "titel": titel, 
@@ -209,6 +239,8 @@ def scrape_wikipedia_advanced(url):
             "kategorien": kategorien,
             "siehe_auch": siehe_auch,
             "sprachlinks": sprachlinks,
+            "bilder": bilder_urls,
+            "zeitleiste": zeitleiste,
             "url": url
         }, None
         
@@ -242,8 +274,7 @@ def scrape_sprachversion_kompakt(url):
         ]
 
         def ist_inhaltsabschnitt(text):
-            text_lower = text.lower()
-            return not any(kw in text_lower for kw in nicht_inhalt_keywords)
+            return not any(kw in text.lower() for kw in nicht_inhalt_keywords)
 
         for elem in alle_headlinetags:
             headline_span = elem.find(class_="mw-headline")
@@ -263,11 +294,9 @@ def scrape_sprachversion_kompakt(url):
         return {
             "titel": titel,
             "wortanzahl": len(gesamter_text.split()),
-            "zeichenanzahl": len(gesamter_text),
             "anzahl_abschnitte": len([h for h in ueberschriften if h["ebene"] == "h2"]),
             "ueberschriften": ueberschriften,
-            "anzahl_quellen": anzahl_quellen,
-            "url": url
+            "anzahl_quellen": anzahl_quellen
         }, None
 
     except Exception as e:
@@ -305,7 +334,6 @@ st.set_page_config(page_title="Wiki Analyzer", page_icon="🧠", layout="wide")
 st.title("🧠 Wikipedia Seiten Analyzer")
 st.markdown("Suche nach einem Thema oder gib einen Link ein, um die Architektur des Artikels zu analysieren.")
 
-# NEU: Das smarte Suchfeld
 nutzer_eingabe = st.text_input(
     "Wikipedia URL oder Suchbegriff", 
     placeholder="z. B. 'Albert Einstein' oder direkten Link einfügen..."
@@ -320,15 +348,16 @@ if st.button("Artikel analysieren", type="primary"):
     if not nutzer_eingabe:
         st.warning("Bitte gib eine URL oder einen Suchbegriff ein!")
     else:
+        keys_to_clear = ["sprachvergleich_ergebnis", "sprachvergleich_fehler", "sprachvergleich_sprache", "chat_history"]
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+
         with st.spinner("Suche und analysiere Artikel..."):
-            
-            # 1. Eingabe auflösen (Suche vs. direkter Link)
             aufgeloeste_url, such_fehler = resolve_wikipedia_input(nutzer_eingabe)
-            
             if such_fehler:
                 daten, fehler = None, such_fehler
             else:
-                # 2. Den Artikel scrapen, falls die URL gefunden wurde
                 daten, fehler = scrape_wikipedia_advanced(aufgeloeste_url)
                 
             st.session_state["daten"] = daten
@@ -338,62 +367,112 @@ daten = st.session_state["daten"]
 fehler = st.session_state["fehler"]
 
 if daten is not None or fehler is not None:
-            
     if fehler:
-        # Hier greift nun unsere exakte Meldung: "Link oder Begriff konnte nicht gefunden werden"
         st.error(fehler)
     else:
         st.success(f"Analyse abgeschlossen für: **{daten['titel']}**")
             
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-            "🗺️ Inhalts-Mindmap", 
-            "📚 Quellen & Verweise", 
-            "📄 Rohtext & Download",
+        tab_mindmap, tab_zeitleiste, tab_galerie, tab_chat, tab_quellen, tab_info, tab_sprachen, tab_zitat, tab_text = st.tabs([
+            "🗺️ Mindmap", 
+            "⏱️ Zeitleiste",
+            "🖼️ Galerie",
+            "🤖 KI-Chat",
+            "📚 Quellen", 
             "ℹ️ Übersicht",
-            "🌍 Sprachvergleich",
-            "🖊️ Zitieren"
+            "🌍 Sprachen",
+            "🖊️ Zitieren",
+            "📄 Text"
         ])
             
-        with tab1:
-            st.subheader("Automatische Inhalts-Struktur (Mindmap)")
+        with tab_mindmap:
+            st.subheader("Automatische Inhalts-Struktur")
             if not daten['struktur']:
                 st.info("Keine tieferen Überschriften zur Strukturierung gefunden.")
             else:
                 dot = Digraph(comment=daten['titel'])
                 dot.attr(rankdir='LR') 
-                    
                 dot.node('Haupt', wrap_fuer_mindmap(daten['titel'], breite=25), 
-                         style='filled', color='lightblue', shape='ellipse', 
-                         tooltip=daten['titel'])
+                         style='filled', color='lightblue', shape='ellipse')
                     
                 for i, h2 in enumerate(daten['struktur']):
                     h2_id = f"h2_{i}"
-                    anzeige_text = wrap_fuer_mindmap(h2['text'], breite=20)
-                    dot.node(h2_id, anzeige_text, style='filled', color='lightgray', 
-                              shape='box', tooltip=h2['text'])
+                    dot.node(h2_id, wrap_fuer_mindmap(h2['text'], breite=20), 
+                             style='filled', color='lightgray', shape='box')
                     dot.edge('Haupt', h2_id)
-                        
                     for j, h3 in enumerate(h2['kinder']):
                         h3_id = f"h3_{i}_{j}"
-                        h3_anzeige = wrap_fuer_mindmap(h3, breite=18)
-                        dot.node(h3_id, h3_anzeige, shape='plaintext', tooltip=h3)
+                        dot.node(h3_id, wrap_fuer_mindmap(h3, breite=18), shape='plaintext')
                         dot.edge(h2_id, h3_id)
-                    
                 st.graphviz_chart(dot)
-                st.caption("💡 Tipp: Lange Titel werden umgebrochen statt abgeschnitten. Fahre mit der Maus über einen Knoten, um den vollständigen Originaltext als Tooltip zu sehen.")
-            
-        with tab2:
-            st.subheader("Literaturnachweise, Quellen und Weblinks")
 
-            suchbegriff = st.text_input(
-                "🔍 Quellen durchsuchen", 
-                placeholder="z.B. Autorenname, Jahr oder Stichwort...",
-                key="quellen_suche"
-            )
+        with tab_zeitleiste:
+            st.subheader("Chronologische Zeitleiste")
+            st.markdown("Automatisch extrahierte historische Eckdaten aus dem Text.")
+            if not daten['zeitleiste']:
+                st.info("Es konnten keine eindeutigen Jahreszahlen im Text gefunden werden.")
+            else:
+                for eintrag in daten['zeitleiste']:
+                    st.markdown(f"**{eintrag['jahr']}** — {eintrag['text']}")
+
+        with tab_galerie:
+            st.subheader("Artikel-Galerie")
+            if not daten['bilder']:
+                st.info("Keine Bilder in diesem Artikel gefunden.")
+            else:
+                cols = st.columns(3)
+                for i, img_url in enumerate(daten['bilder']):
+                    with cols[i % 3]:
+                        st.image(img_url, use_container_width=True)
+
+        with tab_chat:
+            st.subheader("🤖 Frag den Artikel (KI-Assistent)")
+            st.markdown("Nutze KI, um konkrete Fragen an diesen Wikipedia-Artikel zu stellen. *(Benötigt einen kostenlosen Google Gemini API-Key)*")
+            
+            api_key = st.text_input("Gemini API Key eingeben (wird nach Neuladen der Seite gelöscht):", type="password")
+            st.markdown("[Hier kostenlosen API Key erstellen](https://aistudio.google.com/app/apikey)")
+            st.divider()
+
+            if "chat_history" not in st.session_state:
+                st.session_state.chat_history = []
+                
+            for msg in st.session_state.chat_history:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+                    
+            user_q = st.chat_input("Deine Frage zum Artikel...")
+            if user_q:
+                if not api_key:
+                    st.error("Bitte gib oben erst deinen API Key ein.")
+                else:
+                    st.session_state.chat_history.append({"role": "user", "content": user_q})
+                    with st.chat_message("user"):
+                        st.markdown(user_q)
+                    
+                    with st.chat_message("assistant"):
+                        with st.spinner("Analysiere Text..."):
+                            try:
+                                genai.configure(api_key=api_key)
+                                model = genai.GenerativeModel('gemini-1.5-flash')
+                                context_text = daten['text'][:60000]
+                                prompt = (
+                                    f"Du bist ein hilfreicher Forschungs-Assistent. Beantworte die folgende Frage des Nutzers "
+                                    f"AUSSCHLIESSLICH basierend auf dem untenstehenden Wikipedia-Text. Erfinde nichts dazu. "
+                                    f"Wenn die Antwort nicht im Text steht, sage das deutlich.\n\n"
+                                    f"WIKIPEDIA TEXT:\n{context_text}\n\n"
+                                    f"FRAGE DES NUTZERS:\n{user_q}"
+                                )
+                                response = model.generate_content(prompt)
+                                st.markdown(response.text)
+                                st.session_state.chat_history.append({"role": "assistant", "content": response.text})
+                            except Exception as e:
+                                st.error(f"Fehler bei der KI-Anfrage. Bitte prüfe deinen API-Key. Details: {e}")
+            
+        with tab_quellen:
+            st.subheader("Literaturnachweise, Quellen und Weblinks")
+            suchbegriff = st.text_input("🔍 Quellen durchsuchen", key="quellen_suche")
 
             def filtere(liste, begriff):
-                if not begriff:
-                    return liste
+                if not begriff: return liste
                 return [eintrag for eintrag in liste if begriff.lower() in eintrag.lower()]
 
             einzelnachweise_gefiltert = filtere(daten['quellen']['Einzelnachweise'], suchbegriff)
@@ -401,173 +480,96 @@ if daten is not None or fehler is not None:
             weblinks_gefiltert = filtere(daten['quellen']['Weblinks'], suchbegriff)
 
             if suchbegriff:
-                treffer_gesamt = len(einzelnachweise_gefiltert) + len(literatur_gefiltert) + len(weblinks_gefiltert)
-                st.caption(f"{treffer_gesamt} Treffer für \"{suchbegriff}\"")
+                st.caption(f"{len(einzelnachweise_gefiltert) + len(literatur_gefiltert) + len(weblinks_gefiltert)} Treffer")
                 
             spalte1, spalte2, spalte3 = st.columns(3)
                 
             with spalte1:
                 st.markdown("### 📝 Einzelnachweise")
                 if einzelnachweise_gefiltert:
-                    for ref in einzelnachweise_gefiltert[:40]: 
-                        st.caption(ref)
-                    if len(einzelnachweise_gefiltert) > 40:
-                        st.text(f"... und {len(einzelnachweise_gefiltert)-40} weitere Nachweise.")
-                elif suchbegriff:
-                    st.info("Keine Treffer.")
-                else:
-                    st.info("Keine direkten Einzelnachweise gefunden.")
+                    for ref in einzelnachweise_gefiltert[:40]: st.caption(ref)
+                    if len(einzelnachweise_gefiltert) > 40: st.text(f"... und {len(einzelnachweise_gefiltert)-40} weitere.")
+                elif suchbegriff: st.info("Keine Treffer.")
+                else: st.info("Keine direkten Einzelnachweise gefunden.")
                         
             with spalte2:
                 st.markdown("### 📖 Literatur")
                 if literatur_gefiltert:
-                    for lit in literatur_gefiltert:
-                        st.markdown(f"- {lit}")
-                elif suchbegriff:
-                    st.info("Keine Treffer.")
-                else:
-                    st.info("Keine Literatureinträge gefunden.")
+                    for lit in literatur_gefiltert: st.markdown(f"- {lit}")
+                elif suchbegriff: st.info("Keine Treffer.")
+                else: st.info("Keine Literatureinträge gefunden.")
                         
             with spalte3:
                 st.markdown("### 🔗 Weblinks")
                 if weblinks_gefiltert:
-                    for link in weblinks_gefiltert:
-                        st.markdown(f"- {link}")
-                elif suchbegriff:
-                    st.info("Keine Treffer.")
-                else:
-                    st.info("Keine externen Weblinks gefunden.")
+                    for link in weblinks_gefiltert: st.markdown(f"- {link}")
+                elif suchbegriff: st.info("Keine Treffer.")
+                else: st.info("Keine externen Weblinks gefunden.")
 
-        with tab3:
-            st.subheader("Extrahierter Fließtext")
-            st.download_button(
-                label="💾 Textdatei (.txt) herunterladen",
-                data=daten['text'],
-                file_name=f"{daten['titel'].replace(' ', '_')}.txt",
-                mime="text/plain"
-            )
-            st.text_area(label="Textvorschau", value=daten['text'], height=400, disabled=True)
-
-        with tab4:
+        with tab_info:
             st.subheader("Schnellübersicht")
-
             ueb_spalte1, ueb_spalte2 = st.columns([3, 2])
-
             with ueb_spalte1:
                 st.markdown("### 📋 Infobox")
                 if daten['infobox']:
-                    for key, value in daten['infobox'].items():
-                        st.markdown(f"**{key}:** {value}")
+                    for key, value in daten['infobox'].items(): st.markdown(f"**{key}:** {value}")
                 elif daten.get('infobox_roh_gefunden'):
                     st.warning("Eine Infobox wurde gefunden, aber ihre Struktur konnte nicht ausgelesen werden.")
                 else:
-                    st.info("Keine Infobox auf dieser Seite gefunden (nicht jeder Artikel hat eine).")
-
+                    st.info("Keine Infobox auf dieser Seite gefunden.")
                 st.markdown("### 🔗 Siehe auch")
                 if daten['siehe_auch']:
-                    for eintrag in daten['siehe_auch']:
-                        st.markdown(f"- {eintrag}")
+                    for eintrag in daten['siehe_auch']: st.markdown(f"- {eintrag}")
                 else:
                     st.info("Kein 'Siehe auch'-Abschnitt gefunden.")
 
             with ueb_spalte2:
                 st.markdown("### 🏷️ Kategorien")
                 if daten['kategorien']:
-                    for kat in daten['kategorien']:
-                        st.markdown(f"`{kat}`")
+                    for kat in daten['kategorien']: st.markdown(f"`{kat}`")
                 else:
                     st.info("Keine Kategorien gefunden.")
 
-        with tab5:
+        with tab_sprachen:
             st.subheader("Artikel in anderen Sprachen vergleichen")
-
             if not daten['sprachlinks']:
-                st.info("Für diesen Artikel wurden keine anderssprachigen Versionen gefunden.")
+                st.info("Keine anderssprachigen Versionen gefunden.")
             else:
                 sprach_namen = {
                     "en": "Englisch", "fr": "Französisch", "es": "Spanisch", 
                     "it": "Italienisch", "nl": "Niederländisch", "pl": "Polnisch",
-                    "ru": "Russisch", "ja": "Japanisch", "zh": "Chinesisch",
-                    "pt": "Portugiesisch", "sv": "Schwedisch", "ar": "Arabisch"
+                    "ru": "Russisch", "ja": "Japanisch", "zh": "Chinesisch"
                 }
-                optionen = {
-                    f"{sprach_namen.get(code, code.upper())} ({code})": code 
-                    for code in daten['sprachlinks'].keys()
-                }
-                    
-                gewaehlte_anzeige = st.selectbox("Mit welcher Sprachversion vergleichen?", options=list(optionen.keys()))
+                optionen = {f"{sprach_namen.get(code, code.upper())} ({code})": code for code in daten['sprachlinks'].keys()}
+                gewaehlte_anzeige = st.selectbox("Mit Sprachversion vergleichen:", options=list(optionen.keys()))
                     
                 if st.button("Vergleichen", key="sprachvergleich_btn"):
-                    gewaehlter_code = optionen[gewaehlte_anzeige]
-                    vergleichs_url = daten['sprachlinks'][gewaehlter_code]
-                        
-                    with st.spinner(f"Lade {gewaehlte_anzeige} Version..."):
-                        vergleich, vfehler = scrape_sprachversion_kompakt(vergleichs_url)
-                    
+                    with st.spinner(f"Lade {gewaehlte_anzeige}..."):
+                        vergleich, vfehler = scrape_sprachversion_kompakt(daten['sprachlinks'][optionen[gewaehlte_anzeige]])
                     st.session_state["sprachvergleich_ergebnis"] = vergleich
                     st.session_state["sprachvergleich_fehler"] = vfehler
                     st.session_state["sprachvergleich_sprache"] = gewaehlte_anzeige
 
                 vergleich = st.session_state.get("sprachvergleich_ergebnis")
                 vfehler = st.session_state.get("sprachvergleich_fehler")
-                angezeigte_sprache = st.session_state.get("sprachvergleich_sprache")
-
                 if vfehler:
-                    st.error(f"Konnte Vergleichsversion nicht laden: {vfehler}")
+                    st.error(f"Fehler: {vfehler}")
                 elif vergleich:
-                    eigene_wortanzahl = len(daten['text'].split())
-                    eigene_h2_anzahl = len(daten['struktur'])
-                    eigene_quellenzahl = (
-                        len(daten['quellen']['Einzelnachweise']) +
-                        len(daten['quellen']['Literatur']) +
-                        len(daten['quellen']['Weblinks'])
-                    )
-
-                    st.markdown("### 📊 Metriken im Vergleich")
+                    ew, eh = len(daten['text'].split()), len(daten['struktur'])
+                    eq = len(daten['quellen']['Einzelnachweise']) + len(daten['quellen']['Literatur']) + len(daten['quellen']['Weblinks'])
                     m1, m2, m3 = st.columns(3)
-                    with m1:
-                        st.metric("Wortanzahl", f"{eigene_wortanzahl:,}", delta=f"{eigene_wortanzahl - vergleich['wortanzahl']:,} vs. {angezeigte_sprache}")
-                    with m2:
-                        st.metric("Anzahl Abschnitte", eigene_h2_anzahl, delta=eigene_h2_anzahl - vergleich['anzahl_abschnitte'])
-                    with m3:
-                        st.metric("Anzahl Quellen (ca.)", eigene_quellenzahl, delta=eigene_quellenzahl - vergleich['anzahl_quellen'])
-                    st.caption("Delta-Werte zeigen die Differenz: Original-Artikel minus Vergleichsversion.")
+                    m1.metric("Wortanzahl", f"{ew:,}", delta=f"{ew - vergleich['wortanzahl']:,} vs. Original")
+                    m2.metric("Abschnitte", eh, delta=eh - vergleich['anzahl_abschnitte'])
+                    m3.metric("Quellen", eq, delta=eq - vergleich['anzahl_quellen'])
 
-                    st.markdown("### 🗂️ Abschnitts-Überschriften im Vergleich")
-                    vgl_spalte1, vgl_spalte2 = st.columns(2)
-                        
-                    with vgl_spalte1:
-                        st.markdown(f"**🇩🇪 {daten['titel']}**")
-                        for h2 in daten['struktur']:
-                            st.markdown(f"- {h2['text']}")
-                        
-                    with vgl_spalte2:
-                        st.markdown(f"**{angezeigte_sprache}: {vergleich['titel']}**")
-                        for h in vergleich['ueberschriften']:
-                            if h['ebene'] == 'h2':
-                                st.markdown(f"- {h['text']}")
-
-        with tab6:
+        with tab_zitat:
             st.subheader("Artikel zitieren")
-            st.markdown("Erzeugt eine zitierfähige Angabe für diesen Wikipedia-Artikel mit aktuellem Abrufdatum.")
-
-            zitierstile = [
-                "Harvard", "APA 7", "MLA 9", "Chicago (Autor-Datum)", 
-                "Chicago (Notes-Bibliography)", "IEEE", "Vancouver", 
-                "DIN 1505-2", "ÖNORM", "Kurzform (Inline)"
-            ]
-            
-            gewaehlter_stil = st.selectbox(
-                "Zitierformat", 
-                options=zitierstile,
-                key="zitierstil_auswahl"
-            )
-
+            zitierstile = ["Harvard", "APA 7", "MLA 9", "Chicago (Autor-Datum)", "DIN 1505-2", "Kurzform (Inline)"]
+            gewaehlter_stil = st.selectbox("Zitierformat", options=zitierstile, key="zitierstil_auswahl")
             zitat_text = generiere_zitation(daten['titel'], daten['url'], zitierstil=gewaehlter_stil)
+            st.text_area("Generierte Zitation", value=zitat_text, height=100)
 
-            st.text_area("Generierte Zitation (zum Kopieren markieren)", value=zitat_text, height=100)
-            st.caption(
-                "⚠️ Hinweis: Wikipedia gilt in vielen akademischen Kontexten nicht als "
-                "zitierfähige Primärquelle. Prüfe die Anforderungen deiner Institution und "
-                "ziehe nach Möglichkeit die in 'Einzelnachweise' gelisteten Originalquellen heran."
-            )
+        with tab_text:
+            st.subheader("Extrahierter Fließtext")
+            st.download_button("💾 Textdatei (.txt) herunterladen", data=daten['text'], file_name=f"{daten['titel']}.txt")
+            st.text_area("Textvorschau", value=daten['text'], height=400, disabled=True)
