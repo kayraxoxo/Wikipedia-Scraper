@@ -6,7 +6,6 @@ from datetime import datetime
 import urllib.parse
 import textwrap
 import re
-import google.generativeai as genai
 
 # --- INTELLIGENTE SUCHE & URL-AUFLÖSUNG ---
 def resolve_wikipedia_input(user_input):
@@ -32,17 +31,77 @@ def resolve_wikipedia_input(user_input):
 
 # --- FEATURE-EXTRAKTOREN (Bilder & Zeitleiste) ---
 def extrahiere_bilder(soup):
+    """Extrahiert Vorschaubilder aus dem Artikel als Liste von Dicts mit
+    src (Bild-URL), link (Bildbeschreibungsseite) und caption (Bildunterschrift).
+
+    WICHTIG: Das alte MediaWiki-Markup verlinkte Bilder über <a class="image">,
+    das aktuelle Vector-2022-Skin nutzt aber meist <img class="mw-file-element">
+    innerhalb von <figure>/<span class="mw-default-size"> ohne dass das
+    umschließende <a> zwingend die Klasse "image" trägt. Nur nach a.image zu
+    suchen lieferte deshalb bei vielen aktuellen Artikeln gar keine Treffer,
+    obwohl Bilder vorhanden waren. Wir suchen daher direkt nach allen <img>
+    im Inhaltsbereich und ignorieren bewusst reine UI-/Icon-Bilder (Edit-Stift-
+    Icons, Lupe, etc.) sowie Vektorgrafiken/Logos.
+    """
+    such_bereich = soup.find(id="mw-content-text") or soup
     bilder = []
-    for a in soup.find_all('a', class_='image'):
-        img = a.find('img')
-        if img:
-            src = img.get('src') or img.get('data-src')
-            if src:
-                if src.startswith('//'):
-                    src = 'https:' + src
-                if not src.endswith('.svg') and src not in bilder:
-                    bilder.append(src)
-    return bilder[:24] 
+    gesehene_urls = set()
+
+    for img in such_bereich.find_all('img'):
+        src = img.get('src') or img.get('data-src')
+        if not src:
+            srcset = img.get('srcset') or img.get('data-srcset')
+            if srcset:
+                src = srcset.split(',')[0].strip().split(' ')[0]
+        if not src:
+            continue
+
+        if src.startswith('//'):
+            src = 'https:' + src
+        elif src.startswith('/'):
+            src = 'https://de.wikipedia.org' + src
+
+        breite = img.get('width')
+        try:
+            breite_px = int(breite) if breite else None
+        except ValueError:
+            breite_px = None
+
+        ist_icon = breite_px is not None and breite_px <= 20
+        ist_svg = src.lower().endswith('.svg')
+
+        if ist_icon or src in gesehene_urls:
+            continue
+
+        caption = ""
+        figure_eltern = img.find_parent('figure')
+        if figure_eltern:
+            figcaption = figure_eltern.find('figcaption')
+            if figcaption:
+                caption = figcaption.get_text(separator=' ', strip=True)
+        if not caption:
+            thumb_eltern = img.find_parent(class_='thumbinner')
+            if thumb_eltern:
+                caption_div = thumb_eltern.find(class_='thumbcaption')
+                if caption_div:
+                    caption = caption_div.get_text(separator=' ', strip=True)
+
+        link = ""
+        a_eltern = img.find_parent('a')
+        if a_eltern and a_eltern.get('href'):
+            href = a_eltern['href']
+            if href.startswith('//'):
+                link = 'https:' + href
+            elif href.startswith('/'):
+                link = 'https://de.wikipedia.org' + href
+            else:
+                link = href
+
+        if not ist_svg:
+            bilder.append({"src": src, "link": link, "caption": caption})
+            gesehene_urls.add(src)
+
+    return bilder[:24]
 
 def extrahiere_zeitleiste(text):
     zeitleiste = []
@@ -122,7 +181,11 @@ def extrahiere_kategorien(soup):
     return [a.get_text(strip=True) for a in catlinks.find_all('a') if a.get_text(strip=True)]
 
 def extrahiere_siehe_auch(alle_headlinetags):
+    """Extrahiert die Links aus dem Abschnitt 'Siehe auch' inklusive URL,
+    damit sie in der UI als klickbare Links dargestellt werden koennen
+    (vorher wurde nur der Linktext ohne href gespeichert)."""
     ergebnisse = []
+    gesehene_texte = set()
     for i, headline in enumerate(alle_headlinetags):
         h_text = headline.get_text(strip=True)
         if "siehe auch" in h_text.lower():
@@ -135,8 +198,10 @@ def extrahiere_siehe_auch(alle_headlinetags):
                     text = a.get_text(strip=True)
                     href = a.get('href', '')
                     if text and href.startswith('/wiki/') and ':' not in href.split('/wiki/')[-1]:
-                        if text not in ergebnisse:
-                            ergebnisse.append(text)
+                        if text not in gesehene_texte:
+                            voll_url = 'https://de.wikipedia.org' + href
+                            ergebnisse.append({"text": text, "url": voll_url})
+                            gesehene_texte.add(text)
                 el = el.find_next_sibling()
     return ergebnisse
 
@@ -216,8 +281,32 @@ def scrape_wikipedia_advanced(url):
                     for li in listen_eintraege:
                         text = li.text.strip()
                         text = text.replace('↑ ', '').strip()
-                        if text and text not in quellen_daten[schluessel]:
-                            quellen_daten[schluessel].append(text)
+
+                        # Alle externen (http/https) Links innerhalb dieses
+                        # Listeneintrags einsammeln. Vorher wurde hier nur
+                        # li.text.strip() gespeichert, wodurch sämtliche
+                        # href-Verknüpfungen (z. B. der eigentliche Link
+                        # einer Quelle/eines Weblinks) verloren gingen.
+                        links_in_eintrag = []
+                        for a in li.find_all('a', href=True):
+                            href = a['href']
+                            if href.startswith('http://') or href.startswith('https://'):
+                                if href not in links_in_eintrag:
+                                    links_in_eintrag.append(href)
+                            elif href.startswith('//'):
+                                voll = 'https:' + href
+                                if voll not in links_in_eintrag:
+                                    links_in_eintrag.append(voll)
+
+                        if text:
+                            bereits_vorhanden = any(
+                                eintrag["text"] == text for eintrag in quellen_daten[schluessel]
+                            )
+                            if not bereits_vorhanden:
+                                quellen_daten[schluessel].append({
+                                    "text": text,
+                                    "links": links_in_eintrag
+                                })
                     aktuelles_element = aktuelles_element.find_next_sibling()
 
         infobox_daten = extrahiere_infobox(soup)
@@ -348,7 +437,7 @@ if st.button("Artikel analysieren", type="primary"):
     if not nutzer_eingabe:
         st.warning("Bitte gib eine URL oder einen Suchbegriff ein!")
     else:
-        keys_to_clear = ["sprachvergleich_ergebnis", "sprachvergleich_fehler", "sprachvergleich_sprache", "chat_history"]
+        keys_to_clear = ["sprachvergleich_ergebnis", "sprachvergleich_fehler", "sprachvergleich_sprache"]
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
@@ -372,11 +461,10 @@ if daten is not None or fehler is not None:
     else:
         st.success(f"Analyse abgeschlossen für: **{daten['titel']}**")
             
-        tab_mindmap, tab_zeitleiste, tab_galerie, tab_chat, tab_quellen, tab_info, tab_sprachen, tab_zitat, tab_text = st.tabs([
+        tab_mindmap, tab_zeitleiste, tab_galerie, tab_quellen, tab_info, tab_sprachen, tab_zitat, tab_text = st.tabs([
             "🗺️ Mindmap", 
             "⏱️ Zeitleiste",
             "🖼️ Galerie",
-            "🤖 KI-Chat",
             "📚 Quellen", 
             "ℹ️ Übersicht",
             "🌍 Sprachen",
@@ -420,60 +508,31 @@ if daten is not None or fehler is not None:
                 st.info("Keine Bilder in diesem Artikel gefunden.")
             else:
                 cols = st.columns(3)
-                for i, img_url in enumerate(daten['bilder']):
+                for i, bild in enumerate(daten['bilder']):
                     with cols[i % 3]:
-                        st.image(img_url, use_container_width=True)
+                        st.image(bild["src"], use_container_width=True, caption=bild.get("caption") or None)
+                        if bild.get("link"):
+                            st.markdown(f"[🔗 Bildquelle ansehen]({bild['link']})")
 
-        with tab_chat:
-            st.subheader("🤖 Frag den Artikel (KI-Assistent)")
-            st.markdown("Nutze KI, um konkrete Fragen an diesen Wikipedia-Artikel zu stellen. *(Benötigt einen kostenlosen Google Gemini API-Key)*")
-            
-            api_key = st.text_input("Gemini API Key eingeben (wird nach Neuladen der Seite gelöscht):", type="password")
-            st.markdown("[Hier kostenlosen API Key erstellen](https://aistudio.google.com/app/apikey)")
-            st.divider()
-
-            if "chat_history" not in st.session_state:
-                st.session_state.chat_history = []
-                
-            for msg in st.session_state.chat_history:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
-                    
-            user_q = st.chat_input("Deine Frage zum Artikel...")
-            if user_q:
-                if not api_key:
-                    st.error("Bitte gib oben erst deinen API Key ein.")
-                else:
-                    st.session_state.chat_history.append({"role": "user", "content": user_q})
-                    with st.chat_message("user"):
-                        st.markdown(user_q)
-                    
-                    with st.chat_message("assistant"):
-                        with st.spinner("Analysiere Text..."):
-                            try:
-                                genai.configure(api_key=api_key)
-                                model = genai.GenerativeModel('gemini-1.5-flash')
-                                context_text = daten['text'][:60000]
-                                prompt = (
-                                    f"Du bist ein hilfreicher Forschungs-Assistent. Beantworte die folgende Frage des Nutzers "
-                                    f"AUSSCHLIESSLICH basierend auf dem untenstehenden Wikipedia-Text. Erfinde nichts dazu. "
-                                    f"Wenn die Antwort nicht im Text steht, sage das deutlich.\n\n"
-                                    f"WIKIPEDIA TEXT:\n{context_text}\n\n"
-                                    f"FRAGE DES NUTZERS:\n{user_q}"
-                                )
-                                response = model.generate_content(prompt)
-                                st.markdown(response.text)
-                                st.session_state.chat_history.append({"role": "assistant", "content": response.text})
-                            except Exception as e:
-                                st.error(f"Fehler bei der KI-Anfrage. Bitte prüfe deinen API-Key. Details: {e}")
-            
         with tab_quellen:
             st.subheader("Literaturnachweise, Quellen und Weblinks")
             suchbegriff = st.text_input("🔍 Quellen durchsuchen", key="quellen_suche")
 
             def filtere(liste, begriff):
                 if not begriff: return liste
-                return [eintrag for eintrag in liste if begriff.lower() in eintrag.lower()]
+                return [eintrag for eintrag in liste if begriff.lower() in eintrag["text"].lower()]
+
+            def rendere_quelleneintrag(eintrag):
+                """Zeigt den Quelltext an; falls der Eintrag externe Links enthält,
+                werden diese zusätzlich als klickbare Links angehängt, statt wie
+                zuvor verworfen zu werden."""
+                text = eintrag["text"]
+                links = eintrag.get("links", [])
+                if links:
+                    link_md = " ".join(f"[🔗 Link {i+1}]({url})" for i, url in enumerate(links))
+                    st.markdown(f"- {text}  \n  {link_md}")
+                else:
+                    st.markdown(f"- {text}")
 
             einzelnachweise_gefiltert = filtere(daten['quellen']['Einzelnachweise'], suchbegriff)
             literatur_gefiltert = filtere(daten['quellen']['Literatur'], suchbegriff)
@@ -487,7 +546,8 @@ if daten is not None or fehler is not None:
             with spalte1:
                 st.markdown("### 📝 Einzelnachweise")
                 if einzelnachweise_gefiltert:
-                    for ref in einzelnachweise_gefiltert[:40]: st.caption(ref)
+                    for ref in einzelnachweise_gefiltert[:40]:
+                        rendere_quelleneintrag(ref)
                     if len(einzelnachweise_gefiltert) > 40: st.text(f"... und {len(einzelnachweise_gefiltert)-40} weitere.")
                 elif suchbegriff: st.info("Keine Treffer.")
                 else: st.info("Keine direkten Einzelnachweise gefunden.")
@@ -495,14 +555,16 @@ if daten is not None or fehler is not None:
             with spalte2:
                 st.markdown("### 📖 Literatur")
                 if literatur_gefiltert:
-                    for lit in literatur_gefiltert: st.markdown(f"- {lit}")
+                    for lit in literatur_gefiltert:
+                        rendere_quelleneintrag(lit)
                 elif suchbegriff: st.info("Keine Treffer.")
                 else: st.info("Keine Literatureinträge gefunden.")
                         
             with spalte3:
                 st.markdown("### 🔗 Weblinks")
                 if weblinks_gefiltert:
-                    for link in weblinks_gefiltert: st.markdown(f"- {link}")
+                    for link in weblinks_gefiltert:
+                        rendere_quelleneintrag(link)
                 elif suchbegriff: st.info("Keine Treffer.")
                 else: st.info("Keine externen Weblinks gefunden.")
 
@@ -519,7 +581,7 @@ if daten is not None or fehler is not None:
                     st.info("Keine Infobox auf dieser Seite gefunden.")
                 st.markdown("### 🔗 Siehe auch")
                 if daten['siehe_auch']:
-                    for eintrag in daten['siehe_auch']: st.markdown(f"- {eintrag}")
+                    for eintrag in daten['siehe_auch']: st.markdown(f"- [{eintrag['text']}]({eintrag['url']})")
                 else:
                     st.info("Kein 'Siehe auch'-Abschnitt gefunden.")
 
