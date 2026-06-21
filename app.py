@@ -34,25 +34,13 @@ def resolve_wikipedia_input(user_input):
 
 def lade_kategorie_mitglieder(kategorie_name, fortsetzung=None, anzahl=50):
     """Lädt Artikel (Namespace 0, also keine Unterkategorien/Dateien) einer
-    Wikipedia-Kategorie über die MediaWiki-API list=categorymembers.
-
-    kategorie_name: reiner Anzeigename ohne 'Kategorie:'-Präfix, so wie ihn
-    extrahiere_kategorien() liefert (z.B. "Physiker (20. Jahrhundert)").
-
-    fortsetzung: der cmcontinue-Token aus dem vorherigen Aufruf, um die
-    nächste Seite zu laden ("mehr laden"-Funktion). None für die erste Seite.
-
-    Gibt (artikel_liste, naechster_fortsetzungs_token, fehler) zurück.
-    artikel_liste ist eine Liste von Dicts: {"titel": ..., "url": ...}.
-    naechster_fortsetzungs_token ist None, wenn keine weiteren Artikel
-    folgen (Ende der Kategorie erreicht).
-    """
+    Wikipedia-Kategorie über die MediaWiki-API list=categorymembers."""
     headers = {"User-Agent": "MeinAdvancedStreamlitBot/1.0 (Kontakt: mein_email@domain.com)"}
     params = {
         "action": "query",
         "list": "categorymembers",
         "cmtitle": f"Kategorie:{kategorie_name}",
-        "cmtype": "page",  # nur Artikel, keine Unterkategorien oder Dateien
+        "cmtype": "page",
         "cmlimit": str(anzahl),
         "format": "json",
     }
@@ -84,18 +72,6 @@ def lade_kategorie_mitglieder(kategorie_name, fortsetzung=None, anzahl=50):
 
 # --- FEATURE-EXTRAKTOREN (Bilder & Zeitleiste) ---
 def extrahiere_bilder(soup):
-    """Extrahiert Vorschaubilder aus dem Artikel als Liste von Dicts mit
-    src (Bild-URL), link (Bildbeschreibungsseite) und caption (Bildunterschrift).
-
-    WICHTIG: Das alte MediaWiki-Markup verlinkte Bilder über <a class="image">,
-    das aktuelle Vector-2022-Skin nutzt aber meist <img class="mw-file-element">
-    innerhalb von <figure>/<span class="mw-default-size"> ohne dass das
-    umschließende <a> zwingend die Klasse "image" trägt. Nur nach a.image zu
-    suchen lieferte deshalb bei vielen aktuellen Artikeln gar keine Treffer,
-    obwohl Bilder vorhanden waren. Wir suchen daher direkt nach allen <img>
-    im Inhaltsbereich und ignorieren bewusst reine UI-/Icon-Bilder (Edit-Stift-
-    Icons, Lupe, etc.) sowie Vektorgrafiken/Logos.
-    """
     such_bereich = soup.find(id="mw-content-text") or soup
     bilder = []
     gesehene_urls = set()
@@ -157,30 +133,10 @@ def extrahiere_bilder(soup):
     return bilder[:24]
 
 def extrahiere_zeitleiste(text):
-    """Extrahiert chronologische Eckdaten aus dem Fließtext.
-
-    PROBLEM (Bugfix): Die reine Regex \\b(1[0-9]{3}|20[0-9]{2})\\b matcht JEDE
-    vierstellige Zahl in diesem Bereich, unabhängig davon, ob es sich um eine
-    Jahreszahl handelt. Das führte zu Fehltreffern wie "... umfasst insgesamt
-    1800 Seiten" oder "rund 1900 Mitarbeiter", die als Jahr 1800/1900
-    fehlinterpretiert wurden.
-
-    FIX: Eine gefundene Zahl wird nur als Jahr akzeptiert, wenn
-    1) sie NICHT unmittelbar von einem Mengenwort (Seiten, Mitarbeiter,
-       Exemplare, Euro, etc.) gefolgt wird, UND
-    2) sie NICHT Teil einer offensichtlichen Zahlenangabe ist (z. B. direkt
-       vor/nach einer weiteren Zahl, Prozent- oder Währungszeichen steht).
-    Zusätzlich werden Sätze mit eindeutigen Jahres-Signalwörtern
-    ("im Jahr", "geboren", "gestorben", "seit", Monatsnamen davor/danach etc.)
-    leicht bevorzugt, aber nicht zwingend vorausgesetzt, da viele valide
-    Jahresangaben auch ohne Signalwort auftreten (z. B. "1879 in Ulm geboren").
-    """
     zeitleiste = []
     text_clean = re.sub(r'\[\d+\]', '', text)
     saetze = re.split(r'(?<=[.!?]) +', text_clean)
 
-    # Wörter, die direkt nach einer Zahl stehen und sie als Mengenangabe
-    # statt als Jahreszahl entlarven (z. B. "1800 Seiten", "1900 Mitarbeiter")
     mengen_woerter = (
         r'(Seite|Seiten|Mitarbeiter|Mitarbeitern|Mitarbeiterinnen|Exemplar|Exemplare|Exemplaren|'
         r'Euro|Dollar|Mark|Pfund|Einwohner|Einwohnern|Menschen|Personen|Soldaten|'
@@ -193,39 +149,26 @@ def extrahiere_zeitleiste(text):
         if not (30 < len(satz) < 300):
             continue
 
-        # Alle vierstelligen Kandidaten im Satz einsammeln, nicht nur den ersten
         for match in re.finditer(r'\b(1[0-9]{3}|20[0-9]{2})\b', satz):
             jahr = int(match.group(1))
             start, ende = match.span()
 
-            # Kontext direkt vor und nach der Zahl prüfen
             vor_kontext = satz[max(0, start - 15):start]
             nach_kontext = satz[ende:ende + 20]
 
-            # 1) Mengenwort direkt danach -> keine Jahreszahl
             if re.match(r'\s*' + mengen_woerter + r'\b', nach_kontext, re.IGNORECASE):
                 continue
-
-            # 2) Zahl ist Teil einer größeren Zahl/Dezimalzahl oder grenzt an
-            #    Währungs-/Prozentzeichen bzw. eine weitere Zahl an
-            #    (z. B. "12.000", "1900-2000 Euro", "30 1800 45")
             if re.match(r'^[.,]\d', nach_kontext) or re.search(r'[.,]$', vor_kontext):
                 continue
             if re.match(r'\s*[%€$]', nach_kontext):
                 continue
             if re.match(r'\s*[-–]\s*\d', nach_kontext):
-                # Spannen wie "1900-2000" sind oft Mengen-/Zeiträume ohne
-                # Einzeljahr-Aussage - im Zweifel trotzdem überspringen,
-                # da das erste Glied selten allein als Ereignisjahr gilt
                 continue
-
-            # 3) Direkt benachbarte weitere Ziffer (z. B. "19005" durch
-            #    fehlerhafte Worttrennung) ausschließen
             if re.match(r'^\d', nach_kontext) or re.search(r'\d$', vor_kontext):
                 continue
 
             zeitleiste.append((jahr, satz.strip()))
-            break  # pro Satz reicht ein Treffer, um Duplikate zu vermeiden
+            break  
 
     zeitleiste.sort(key=lambda x: x[0])
 
@@ -293,9 +236,6 @@ def extrahiere_kategorien(soup):
     return [a.get_text(strip=True) for a in catlinks.find_all('a') if a.get_text(strip=True)]
 
 def extrahiere_siehe_auch(alle_headlinetags):
-    """Extrahiert die Links aus dem Abschnitt 'Siehe auch' inklusive URL,
-    damit sie in der UI als klickbare Links dargestellt werden koennen
-    (vorher wurde nur der Linktext ohne href gespeichert)."""
     ergebnisse = []
     gesehene_texte = set()
     for i, headline in enumerate(alle_headlinetags):
@@ -394,11 +334,6 @@ def scrape_wikipedia_advanced(url):
                         text = li.text.strip()
                         text = text.replace('↑ ', '').strip()
 
-                        # Alle externen (http/https) Links innerhalb dieses
-                        # Listeneintrags einsammeln. Vorher wurde hier nur
-                        # li.text.strip() gespeichert, wodurch sämtliche
-                        # href-Verknüpfungen (z. B. der eigentliche Link
-                        # einer Quelle/eines Weblinks) verloren gingen.
                         links_in_eintrag = []
                         for a in li.find_all('a', href=True):
                             href = a['href']
@@ -532,11 +467,7 @@ def generiere_zitation(titel, url, zitierstil="Harvard"):
 # --- PDF-REPORT-EXPORT ---
 def erstelle_pdf_report(daten, zitierstil="Harvard"):
     """Baut aus den extrahierten Artikeldaten einen vollständigen, in sich
-    geschlossenen PDF-Report (Infobox, Inhaltsstruktur, Zeitleiste, Quellen
-    inkl. Links, Siehe-auch inkl. Links, Kategorien, Zitation).
-    Gibt die PDF-Datei als Bytes zurück (in-memory, kein Schreiben auf Platte
-    nötig), damit sie direkt per st.download_button angeboten werden kann.
-    """
+    geschlossenen PDF-Report."""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import cm
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -547,8 +478,6 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
     from reportlab.lib.enums import TA_LEFT
 
     def esc(text):
-        """XML-escaped Text für reportlab-Paragraphen (& < > müssen escaped
-        werden, da reportlab Paragraph-Text als einfaches XML-Markup liest)."""
         return xml_escape(str(text))
 
     puffer = BytesIO()
@@ -583,7 +512,6 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
 
     story = []
 
-    # --- Titelblock ---
     story.append(Paragraph(esc(daten['titel']), styles['WikiLensTitel']))
     heute_str = datetime.now().strftime("%d.%m.%Y, %H:%M Uhr")
     story.append(Paragraph(
@@ -595,7 +523,6 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
     story.append(HRFlowable(width="100%", color=colors.HexColor('#cccccc'), thickness=1))
     story.append(Spacer(1, 12))
 
-    # --- Infobox ---
     if daten.get('infobox'):
         story.append(Paragraph("Infobox", styles['WikiLensH2']))
         tabellen_daten = [[Paragraph(f"<b>{esc(k)}</b>", styles['WikiLensKlein']),
@@ -614,7 +541,6 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
         story.append(tabelle)
         story.append(Spacer(1, 8))
 
-    # --- Inhaltsstruktur (Mindmap als Gliederung) ---
     if daten.get('struktur'):
         story.append(Paragraph("Inhaltsstruktur", styles['WikiLensH2']))
         unterpunkt_style = ParagraphStyle(
@@ -628,7 +554,6 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
                 ))
         story.append(Spacer(1, 8))
 
-    # --- Zeitleiste ---
     if daten.get('zeitleiste'):
         story.append(Paragraph("Zeitleiste", styles['WikiLensH2']))
         for eintrag in daten['zeitleiste']:
@@ -637,7 +562,6 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
             ))
         story.append(Spacer(1, 8))
 
-    # --- Siehe auch ---
     if daten.get('siehe_auch'):
         story.append(Paragraph("Siehe auch", styles['WikiLensH2']))
         for e in daten['siehe_auch']:
@@ -647,14 +571,12 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
             ))
         story.append(Spacer(1, 8))
 
-    # --- Kategorien ---
     if daten.get('kategorien'):
         story.append(Paragraph("Kategorien", styles['WikiLensH2']))
         kategorien_text = " &nbsp;·&nbsp; ".join(esc(k) for k in daten['kategorien'])
         story.append(Paragraph(kategorien_text, styles['WikiLensKlein']))
         story.append(Spacer(1, 8))
 
-    # --- Quellen (Einzelnachweise, Literatur, Weblinks) ---
     quellen_ueberschriften = {
         "Einzelnachweise": "Einzelnachweise",
         "Literatur": "Literatur",
@@ -665,7 +587,6 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
         if not eintraege:
             continue
         story.append(Paragraph(ueberschrift, styles['WikiLensH2']))
-        # Bei sehr vielen Einzelnachweisen den Report nicht unlesbar lang machen
         max_eintraege = 60 if schluessel == "Einzelnachweise" else len(eintraege)
         for eintrag in eintraege[:max_eintraege]:
             text = esc(eintrag["text"])
@@ -687,7 +608,6 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
             ))
         story.append(Spacer(1, 8))
 
-    # --- Zitation ---
     story.append(Paragraph("Zitierfähige Angabe", styles['WikiLensH2']))
     zitat = generiere_zitation(daten['titel'], daten['url'], zitierstil=zitierstil)
     story.append(Paragraph(esc(zitat), body_style))
@@ -703,17 +623,49 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
     puffer.seek(0)
     return puffer.getvalue()
 
+def erstelle_text_pdf(titel, text, url):
+    """Erzeugt ein PDF, das nur den reinen Fließtext im lesefreundlichen Format enthält."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+
+    def esc(text_str):
+        return xml_escape(str(text_str))
+
+    puffer = BytesIO()
+    doc = SimpleDocTemplate(
+        puffer, pagesize=A4,
+        leftMargin=2.5*cm, rightMargin=2.5*cm, topMargin=2.5*cm, bottomMargin=2.5*cm,
+        title=titel, author="WikiLens"
+    )
+
+    styles = getSampleStyleSheet()
+    titel_style = ParagraphStyle(name='ReaderTitel', parent=styles['Title'], fontSize=20, spaceAfter=12)
+    body_style = ParagraphStyle(name='ReaderBody', parent=styles['Normal'], fontSize=11, leading=16, spaceAfter=10, alignment=0)
+    meta_style = ParagraphStyle(name='ReaderMeta', parent=styles['Normal'], fontSize=9, textColor=colors.grey, spaceAfter=16)
+
+    story = []
+    story.append(Paragraph(esc(titel), titel_style))
+    story.append(Paragraph(f"Quelle: <link href='{esc(url)}' color='blue'>{esc(url)}</link>", meta_style))
+    story.append(HRFlowable(width="100%", color=colors.HexColor('#cccccc'), thickness=1))
+    story.append(Spacer(1, 12))
+
+    for absatz in text.split('\n\n'):
+        if absatz.strip():
+            story.append(Paragraph(esc(absatz.strip()), body_style))
+
+    doc.build(story)
+    puffer.seek(0)
+    return puffer.getvalue()
+
 
 st.set_page_config(page_title="WikiLens", page_icon="🧠", layout="wide")
 
 st.title("🧠 WikiLens")
 st.markdown("Suche nach einem Thema oder gib einen Link ein, um die Architektur des Artikels zu analysieren.")
 
-# Falls ein Artikel-Sprung (Siehe auch / Kategorie-Browser) im vorherigen Run
-# einen neuen Eingabewert vorgemerkt hat: JETZT übernehmen, bevor das
-# Eingabefeld-Widget unten instanziiert wird. Streamlit verbietet es,
-# session_state[key] eines Widgets zu setzen, NACHDEM es im selben Run
-# bereits gerendert wurde - daher der Umweg über "nutzer_eingabe_pending".
 if "nutzer_eingabe_pending" in st.session_state:
     st.session_state["nutzer_eingabe_feld"] = st.session_state.pop("nutzer_eingabe_pending")
 
@@ -730,13 +682,6 @@ if "fehler" not in st.session_state:
 
 
 def fuehre_analyse_aus(eingabe):
-    """Zentrale Analyse-Routine: löst Suchbegriff/URL auf, scraped den Artikel
-    und speichert das Ergebnis in session_state. Wird sowohl vom
-    "Artikel analysieren"-Button als auch von den direkten Artikel-Sprüngen
-    (z.B. Klick auf einen "Siehe auch"-Eintrag oder einen Kategorie-Artikel)
-    verwendet, damit beide Wege exakt dasselbe Verhalten haben (inkl.
-    Zurücksetzen der artikelgebundenen Caches wie PDF-Report oder
-    Sprachvergleich, die sonst fälschlich zum neuen Artikel angezeigt würden)."""
     keys_to_clear = [
         "sprachvergleich_ergebnis", "sprachvergleich_fehler", "sprachvergleich_sprache",
         "pdf_report_bytes", "pdf_report_url",
@@ -755,8 +700,6 @@ def fuehre_analyse_aus(eingabe):
 
         st.session_state["daten"] = daten
         st.session_state["fehler"] = fehler
-        # Eingabefeld soll im NÄCHSTEN Run den tatsächlich analysierten
-        # Begriff/Link zeigen (nicht im aktuellen - siehe Hinweis oben).
         st.session_state["nutzer_eingabe_pending"] = eingabe
 
 
@@ -776,12 +719,6 @@ if daten is not None or fehler is not None:
     else:
         st.success(f"Analyse abgeschlossen für: **{daten['titel']}**")
 
-        # --- PDF-Report-Export ---
-        # Zweistufig (Button -> Generieren -> Download), damit das PDF nicht bei
-        # jedem Streamlit-Rerun (z.B. durch Tab-Wechsel oder andere Widgets)
-        # unnötig neu gebaut wird. Das fertige PDF wird in session_state
-        # zwischengespeichert, gekoppelt an die analysierte URL, damit ein
-        # Wechsel zu einem neuen Artikel automatisch ein neues PDF erzwingt.
         pdf_export_spalte1, pdf_export_spalte2 = st.columns([1, 3])
         with pdf_export_spalte1:
             if st.button("📑 PDF-Report erstellen", key="pdf_erstellen_btn"):
@@ -791,9 +728,6 @@ if daten is not None or fehler is not None:
                 st.session_state["pdf_report_bytes"] = pdf_bytes
                 st.session_state["pdf_report_url"] = daten["url"]
 
-        # Nur anzeigen, wenn das zwischengespeicherte PDF auch zum aktuell
-        # angezeigten Artikel gehört (sonst würde nach einem neuen Artikel
-        # fälschlich noch der alte Report zum Download angeboten)
         if (st.session_state.get("pdf_report_bytes") and
                 st.session_state.get("pdf_report_url") == daten["url"]):
             with pdf_export_spalte2:
@@ -805,12 +739,6 @@ if daten is not None or fehler is not None:
                     key="pdf_download_btn"
                 )
 
-        # --- Kategorie-Browser ---
-        # Wird angezeigt, sobald in der Übersicht auf eine Kategorie geklickt
-        # wurde. Lädt die Mitgliedsartikel der Kategorie über die Wikipedia-API
-        # (paginiert per "Weitere Artikel laden", da Kategorien hunderte
-        # Artikel enthalten können) und bietet zu jedem einen direkten
-        # Analyse-Sprung an.
         if st.session_state.get("kategorie_browser_aktiv"):
             aktive_kategorie = st.session_state["kategorie_browser_aktiv"]
             with st.container(border=True):
@@ -867,15 +795,16 @@ if daten is not None or fehler is not None:
                     else:
                         st.caption("✓ Alle Artikel dieser Kategorie sind geladen.")
 
-        tab_mindmap, tab_zeitleiste, tab_galerie, tab_quellen, tab_info, tab_sprachen, tab_zitat, tab_text = st.tabs([
+        # --- TABS REIHENFOLGE ANGEPASST ---
+        tab_mindmap, tab_text, tab_zeitleiste, tab_galerie, tab_quellen, tab_info, tab_sprachen, tab_zitat = st.tabs([
             "🗺️ Mindmap", 
+            "📄 Text",
             "⏱️ Zeitleiste",
             "🖼️ Galerie",
             "📚 Quellen", 
             "ℹ️ Übersicht",
             "🌍 Sprachen",
-            "🖊️ Zitieren",
-            "📄 Text"
+            "🖊️ Zitieren"
         ])
             
         with tab_mindmap:
@@ -898,6 +827,42 @@ if daten is not None or fehler is not None:
                         dot.node(h3_id, wrap_fuer_mindmap(h3, breite=18), shape='plaintext')
                         dot.edge(h2_id, h3_id)
                 st.graphviz_chart(dot)
+
+        with tab_text:
+            st.subheader("Lesemodus")
+            st.markdown("Lies den extrahierten Artikeltext ganz entspannt oder lade ihn direkt herunter.")
+            
+            export_col1, export_col2, _ = st.columns([2, 2, 6])
+            with export_col1:
+                st.download_button(
+                    "💾 Als .txt herunterladen",
+                    data=daten['text'],
+                    file_name=f"{daten['titel'].replace(' ', '_')}.txt",
+                    use_container_width=True
+                )
+            with export_col2:
+                # PDF Text Export direkt bereitstellen
+                pdf_text_bytes = erstelle_text_pdf(daten['titel'], daten['text'], daten['url'])
+                st.download_button(
+                    "📄 Als .pdf herunterladen",
+                    data=pdf_text_bytes,
+                    file_name=f"{daten['titel'].replace(' ', '_')}_Text.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+
+            st.divider()
+
+            # Reader Ansicht - Formatiert in HTML innerhalb von Markdown für Blocksatz und Zeilenabstand
+            _, reader_col, _ = st.columns([1, 6, 1])
+            with reader_col:
+                for absatz in daten['text'].split('\n\n'):
+                    if absatz.strip():
+                        st.markdown(
+                            f"<p style='font-size: 1.15rem; line-height: 1.8; margin-bottom: 1.2rem; text-align: justify;'>"
+                            f"{xml_escape(absatz.strip())}</p>", 
+                            unsafe_allow_html=True
+                        )
 
         with tab_zeitleiste:
             st.subheader("Chronologische Zeitleiste")
@@ -929,9 +894,6 @@ if daten is not None or fehler is not None:
                 return [eintrag for eintrag in liste if begriff.lower() in eintrag["text"].lower()]
 
             def rendere_quelleneintrag(eintrag):
-                """Zeigt den Quelltext an; falls der Eintrag externe Links enthält,
-                werden diese zusätzlich als klickbare Links angehängt, statt wie
-                zuvor verworfen zu werden."""
                 text = eintrag["text"]
                 links = eintrag.get("links", [])
                 if links:
@@ -1051,8 +1013,3 @@ if daten is not None or fehler is not None:
             gewaehlter_stil = st.selectbox("Zitierformat", options=zitierstile, key="zitierstil_auswahl")
             zitat_text = generiere_zitation(daten['titel'], daten['url'], zitierstil=gewaehlter_stil)
             st.text_area("Generierte Zitation", value=zitat_text, height=100)
-
-        with tab_text:
-            st.subheader("Extrahierter Fließtext")
-            st.download_button("💾 Textdatei (.txt) herunterladen", data=daten['text'], file_name=f"{daten['titel']}.txt")
-            st.text_area("Textvorschau", value=daten['text'], height=400, disabled=True)
