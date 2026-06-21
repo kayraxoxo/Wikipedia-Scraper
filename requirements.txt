@@ -1,0 +1,7 @@
+requests
+beautifulsoup4
+streamlit
+graphviz
+datetime
+bs4
+textwrap
