@@ -379,7 +379,7 @@ def generiere_zitation(titel, url, zitierstil="Harvard"):
 # --- STREAMLIT UI ---
 st.set_page_config(page_title="Wiki Analyzer", page_icon="🧠", layout="wide")
 
-st.title("🧠 Wikipedia Struktur- & Quellen-Analysator")
+st.title("🧠 Wikipedia Seiten Analyzer")
 st.markdown("Analysiere die Architektur eines Artikels, visualisiere ihn als Mindmap und extrahiere alle Belege.")
 
 # Eingabefeld für die URL
