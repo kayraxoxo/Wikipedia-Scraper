@@ -153,7 +153,7 @@ def extrahiere_sprachlinks(soup):
 def scrape_wikipedia_advanced(url):
     headers = {"User-Agent": "MeinAdvancedStreamlitBot/1.0 (Kontakt: mein_email@domain.com)"}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=30)
         
         if response.status_code == 404:
             return None, "Link oder Begriff konnte nicht gefunden werden"
