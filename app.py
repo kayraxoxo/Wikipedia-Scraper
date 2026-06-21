@@ -31,6 +31,57 @@ def resolve_wikipedia_input(user_input):
         
     return None, "Link oder Begriff konnte nicht gefunden werden"
 
+
+def lade_kategorie_mitglieder(kategorie_name, fortsetzung=None, anzahl=50):
+    """Lädt Artikel (Namespace 0, also keine Unterkategorien/Dateien) einer
+    Wikipedia-Kategorie über die MediaWiki-API list=categorymembers.
+
+    kategorie_name: reiner Anzeigename ohne 'Kategorie:'-Präfix, so wie ihn
+    extrahiere_kategorien() liefert (z.B. "Physiker (20. Jahrhundert)").
+
+    fortsetzung: der cmcontinue-Token aus dem vorherigen Aufruf, um die
+    nächste Seite zu laden ("mehr laden"-Funktion). None für die erste Seite.
+
+    Gibt (artikel_liste, naechster_fortsetzungs_token, fehler) zurück.
+    artikel_liste ist eine Liste von Dicts: {"titel": ..., "url": ...}.
+    naechster_fortsetzungs_token ist None, wenn keine weiteren Artikel
+    folgen (Ende der Kategorie erreicht).
+    """
+    headers = {"User-Agent": "MeinAdvancedStreamlitBot/1.0 (Kontakt: mein_email@domain.com)"}
+    params = {
+        "action": "query",
+        "list": "categorymembers",
+        "cmtitle": f"Kategorie:{kategorie_name}",
+        "cmtype": "page",  # nur Artikel, keine Unterkategorien oder Dateien
+        "cmlimit": str(anzahl),
+        "format": "json",
+    }
+    if fortsetzung:
+        params["cmcontinue"] = fortsetzung
+
+    try:
+        response = requests.get(
+            "https://de.wikipedia.org/w/api.php", params=params,
+            headers=headers, timeout=10
+        )
+        if response.status_code != 200:
+            return [], None, f"Status-Code {response.status_code}"
+
+        data = response.json()
+        mitglieder = data.get("query", {}).get("categorymembers", [])
+        artikel = [
+            {
+                "titel": m["title"],
+                "url": "https://de.wikipedia.org/wiki/" + urllib.parse.quote(m["title"].replace(" ", "_"))
+            }
+            for m in mitglieder
+        ]
+        naechster_token = data.get("continue", {}).get("cmcontinue")
+        return artikel, naechster_token, None
+
+    except Exception as e:
+        return [], None, f"Fehler beim Laden der Kategorie: {str(e)}"
+
 # --- FEATURE-EXTRAKTOREN (Bilder & Zeitleiste) ---
 def extrahiere_bilder(soup):
     """Extrahiert Vorschaubilder aus dem Artikel als Liste von Dicts mit
@@ -658,9 +709,18 @@ st.set_page_config(page_title="WikiLens", page_icon="🧠", layout="wide")
 st.title("🧠 WikiLens")
 st.markdown("Suche nach einem Thema oder gib einen Link ein, um die Architektur des Artikels zu analysieren.")
 
+# Falls ein Artikel-Sprung (Siehe auch / Kategorie-Browser) im vorherigen Run
+# einen neuen Eingabewert vorgemerkt hat: JETZT übernehmen, bevor das
+# Eingabefeld-Widget unten instanziiert wird. Streamlit verbietet es,
+# session_state[key] eines Widgets zu setzen, NACHDEM es im selben Run
+# bereits gerendert wurde - daher der Umweg über "nutzer_eingabe_pending".
+if "nutzer_eingabe_pending" in st.session_state:
+    st.session_state["nutzer_eingabe_feld"] = st.session_state.pop("nutzer_eingabe_pending")
+
 nutzer_eingabe = st.text_input(
     "Wikipedia URL oder Suchbegriff", 
-    placeholder="z. B. 'Albert Einstein' oder direkten Link einfügen..."
+    placeholder="z. B. 'Albert Einstein' oder direkten Link einfügen...",
+    key="nutzer_eingabe_feld"
 )
 
 if "daten" not in st.session_state:
@@ -668,24 +728,44 @@ if "daten" not in st.session_state:
 if "fehler" not in st.session_state:
     st.session_state["fehler"] = None
 
+
+def fuehre_analyse_aus(eingabe):
+    """Zentrale Analyse-Routine: löst Suchbegriff/URL auf, scraped den Artikel
+    und speichert das Ergebnis in session_state. Wird sowohl vom
+    "Artikel analysieren"-Button als auch von den direkten Artikel-Sprüngen
+    (z.B. Klick auf einen "Siehe auch"-Eintrag oder einen Kategorie-Artikel)
+    verwendet, damit beide Wege exakt dasselbe Verhalten haben (inkl.
+    Zurücksetzen der artikelgebundenen Caches wie PDF-Report oder
+    Sprachvergleich, die sonst fälschlich zum neuen Artikel angezeigt würden)."""
+    keys_to_clear = [
+        "sprachvergleich_ergebnis", "sprachvergleich_fehler", "sprachvergleich_sprache",
+        "pdf_report_bytes", "pdf_report_url",
+        "kategorie_browser_aktiv", "kategorie_browser_daten",
+    ]
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+
+    with st.spinner("Suche und analysiere Artikel..."):
+        aufgeloeste_url, such_fehler = resolve_wikipedia_input(eingabe)
+        if such_fehler:
+            daten, fehler = None, such_fehler
+        else:
+            daten, fehler = scrape_wikipedia_advanced(aufgeloeste_url)
+
+        st.session_state["daten"] = daten
+        st.session_state["fehler"] = fehler
+        # Eingabefeld soll im NÄCHSTEN Run den tatsächlich analysierten
+        # Begriff/Link zeigen (nicht im aktuellen - siehe Hinweis oben).
+        st.session_state["nutzer_eingabe_pending"] = eingabe
+
+
 if st.button("Artikel analysieren", type="primary"):
     if not nutzer_eingabe:
         st.warning("Bitte gib eine URL oder einen Suchbegriff ein!")
     else:
-        keys_to_clear = ["sprachvergleich_ergebnis", "sprachvergleich_fehler", "sprachvergleich_sprache", "pdf_report_bytes", "pdf_report_url"]
-        for key in keys_to_clear:
-            if key in st.session_state:
-                del st.session_state[key]
-
-        with st.spinner("Suche und analysiere Artikel..."):
-            aufgeloeste_url, such_fehler = resolve_wikipedia_input(nutzer_eingabe)
-            if such_fehler:
-                daten, fehler = None, such_fehler
-            else:
-                daten, fehler = scrape_wikipedia_advanced(aufgeloeste_url)
-                
-            st.session_state["daten"] = daten
-            st.session_state["fehler"] = fehler
+        fuehre_analyse_aus(nutzer_eingabe)
+        st.rerun()
 
 daten = st.session_state["daten"]
 fehler = st.session_state["fehler"]
@@ -724,6 +804,68 @@ if daten is not None or fehler is not None:
                     mime="application/pdf",
                     key="pdf_download_btn"
                 )
+
+        # --- Kategorie-Browser ---
+        # Wird angezeigt, sobald in der Übersicht auf eine Kategorie geklickt
+        # wurde. Lädt die Mitgliedsartikel der Kategorie über die Wikipedia-API
+        # (paginiert per "Weitere Artikel laden", da Kategorien hunderte
+        # Artikel enthalten können) und bietet zu jedem einen direkten
+        # Analyse-Sprung an.
+        if st.session_state.get("kategorie_browser_aktiv"):
+            aktive_kategorie = st.session_state["kategorie_browser_aktiv"]
+            with st.container(border=True):
+                kb_kopf1, kb_kopf2 = st.columns([5, 1])
+                with kb_kopf1:
+                    st.markdown(f"#### 🗂️ Kategorie-Browser: „{aktive_kategorie}“")
+                with kb_kopf2:
+                    if st.button("✕ Schließen", key="kategorie_browser_schliessen"):
+                        st.session_state.pop("kategorie_browser_aktiv", None)
+                        st.session_state.pop("kategorie_browser_daten", None)
+                        st.rerun()
+
+                if "kategorie_browser_daten" not in st.session_state:
+                    with st.spinner(f"Lade Artikel aus „{aktive_kategorie}“..."):
+                        artikel, naechster_token, kb_fehler = lade_kategorie_mitglieder(aktive_kategorie)
+                    st.session_state["kategorie_browser_daten"] = {
+                        "artikel": artikel,
+                        "naechster_token": naechster_token,
+                        "fehler": kb_fehler,
+                    }
+
+                kb_daten = st.session_state["kategorie_browser_daten"]
+
+                if kb_daten["fehler"]:
+                    st.error(kb_daten["fehler"])
+                elif not kb_daten["artikel"]:
+                    st.info("Keine Artikel in dieser Kategorie gefunden.")
+                else:
+                    st.caption(f"{len(kb_daten['artikel'])} Artikel geladen. Klick auf ➜ analysiert den Artikel direkt.")
+                    kb_cols = st.columns(2)
+                    for kb_idx, kb_artikel in enumerate(kb_daten["artikel"]):
+                        with kb_cols[kb_idx % 2]:
+                            kbe_spalte1, kbe_spalte2 = st.columns([5, 1])
+                            with kbe_spalte1:
+                                st.markdown(f"[{kb_artikel['titel']}]({kb_artikel['url']})")
+                            with kbe_spalte2:
+                                if st.button("➜", key=f"kb_sprung_{kb_idx}_{kb_artikel['titel']}"):
+                                    fuehre_analyse_aus(kb_artikel['url'])
+                                    st.rerun()
+
+                    if kb_daten["naechster_token"]:
+                        if st.button("⬇️ Weitere Artikel laden", key="kategorie_browser_mehr"):
+                            with st.spinner("Lade weitere Artikel..."):
+                                neue_artikel, neuer_token, kb_fehler2 = lade_kategorie_mitglieder(
+                                    aktive_kategorie, fortsetzung=kb_daten["naechster_token"]
+                                )
+                            if kb_fehler2:
+                                st.error(kb_fehler2)
+                            else:
+                                kb_daten["artikel"].extend(neue_artikel)
+                                kb_daten["naechster_token"] = neuer_token
+                                st.session_state["kategorie_browser_daten"] = kb_daten
+                            st.rerun()
+                    else:
+                        st.caption("✓ Alle Artikel dieser Kategorie sind geladen.")
 
         tab_mindmap, tab_zeitleiste, tab_galerie, tab_quellen, tab_info, tab_sprachen, tab_zitat, tab_text = st.tabs([
             "🗺️ Mindmap", 
@@ -843,16 +985,31 @@ if daten is not None or fehler is not None:
                     st.warning("Eine Infobox wurde gefunden, aber ihre Struktur konnte nicht ausgelesen werden.")
                 else:
                     st.info("Keine Infobox auf dieser Seite gefunden.")
+
                 st.markdown("### 🔗 Siehe auch")
                 if daten['siehe_auch']:
-                    for eintrag in daten['siehe_auch']: st.markdown(f"- [{eintrag['text']}]({eintrag['url']})")
+                    st.caption("Direkt weiter recherchieren: Klick auf ➜ analysiert den verlinkten Artikel sofort neu.")
+                    for idx, eintrag in enumerate(daten['siehe_auch']):
+                        sa_spalte1, sa_spalte2 = st.columns([5, 1])
+                        with sa_spalte1:
+                            st.markdown(f"[{eintrag['text']}]({eintrag['url']})")
+                        with sa_spalte2:
+                            if st.button("➜", key=f"siehe_auch_sprung_{idx}",
+                                         help=f"{eintrag['text']} direkt analysieren"):
+                                fuehre_analyse_aus(eintrag['url'])
+                                st.rerun()
                 else:
                     st.info("Kein 'Siehe auch'-Abschnitt gefunden.")
 
             with ueb_spalte2:
                 st.markdown("### 🏷️ Kategorien")
                 if daten['kategorien']:
-                    for kat in daten['kategorien']: st.markdown(f"`{kat}`")
+                    st.caption("Klick auf eine Kategorie, um deren Artikel zu durchstöbern.")
+                    for kat_idx, kat in enumerate(daten['kategorien']):
+                        if st.button(kat, key=f"kategorie_browser_{kat_idx}"):
+                            st.session_state["kategorie_browser_aktiv"] = kat
+                            st.session_state.pop("kategorie_browser_daten", None)
+                            st.rerun()
                 else:
                     st.info("Keine Kategorien gefunden.")
 
