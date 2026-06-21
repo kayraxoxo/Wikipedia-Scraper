@@ -6,6 +6,8 @@ from datetime import datetime
 import urllib.parse
 import textwrap
 import re
+from io import BytesIO
+from xml.sax.saxutils import escape as xml_escape
 
 # --- INTELLIGENTE SUCHE & URL-AUFLÖSUNG ---
 def resolve_wikipedia_input(user_input):
@@ -476,7 +478,181 @@ def generiere_zitation(titel, url, zitierstil="Harvard"):
     return formate.get(zitierstil, formate["Harvard"])
 
 
-# --- STREAMLIT UI ---
+# --- PDF-REPORT-EXPORT ---
+def erstelle_pdf_report(daten, zitierstil="Harvard"):
+    """Baut aus den extrahierten Artikeldaten einen vollständigen, in sich
+    geschlossenen PDF-Report (Infobox, Inhaltsstruktur, Zeitleiste, Quellen
+    inkl. Links, Siehe-auch inkl. Links, Kategorien, Zitation).
+    Gibt die PDF-Datei als Bytes zurück (in-memory, kein Schreiben auf Platte
+    nötig), damit sie direkt per st.download_button angeboten werden kann.
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    )
+    from reportlab.lib.enums import TA_LEFT
+
+    def esc(text):
+        """XML-escaped Text für reportlab-Paragraphen (& < > müssen escaped
+        werden, da reportlab Paragraph-Text als einfaches XML-Markup liest)."""
+        return xml_escape(str(text))
+
+    puffer = BytesIO()
+    doc = SimpleDocTemplate(
+        puffer, pagesize=A4,
+        leftMargin=2*cm, rightMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm,
+        title=daten['titel'], author="WikiLens"
+    )
+
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(
+        name='WikiLensTitel', parent=styles['Title'], fontSize=22, spaceAfter=4
+    ))
+    styles.add(ParagraphStyle(
+        name='WikiLensMeta', parent=styles['Normal'], fontSize=9,
+        textColor=colors.grey, spaceAfter=16
+    ))
+    styles.add(ParagraphStyle(
+        name='WikiLensH2', parent=styles['Heading2'], spaceBefore=16, spaceAfter=8,
+        textColor=colors.HexColor('#1a1a2e')
+    ))
+    styles.add(ParagraphStyle(
+        name='WikiLensH3', parent=styles['Heading3'], spaceBefore=8, spaceAfter=4,
+        textColor=colors.HexColor('#16213e')
+    ))
+    styles.add(ParagraphStyle(
+        name='WikiLensKlein', parent=styles['Normal'], fontSize=9, leading=12
+    ))
+    body_style = styles['Normal']
+    body_style.fontSize = 10
+    body_style.leading = 14
+
+    story = []
+
+    # --- Titelblock ---
+    story.append(Paragraph(esc(daten['titel']), styles['WikiLensTitel']))
+    heute_str = datetime.now().strftime("%d.%m.%Y, %H:%M Uhr")
+    story.append(Paragraph(
+        f"WikiLens-Analysereport &middot; Quelle: "
+        f"<link href='{esc(daten['url'])}' color='blue'>{esc(daten['url'])}</link> "
+        f"&middot; erstellt am {heute_str}",
+        styles['WikiLensMeta']
+    ))
+    story.append(HRFlowable(width="100%", color=colors.HexColor('#cccccc'), thickness=1))
+    story.append(Spacer(1, 12))
+
+    # --- Infobox ---
+    if daten.get('infobox'):
+        story.append(Paragraph("Infobox", styles['WikiLensH2']))
+        tabellen_daten = [[Paragraph(f"<b>{esc(k)}</b>", styles['WikiLensKlein']),
+                            Paragraph(esc(v), styles['WikiLensKlein'])]
+                           for k, v in daten['infobox'].items()]
+        tabelle = Table(tabellen_daten, colWidths=[4.5*cm, 11*cm])
+        tabelle.setStyle(TableStyle([
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dddddd')),
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f2f2f2')),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(tabelle)
+        story.append(Spacer(1, 8))
+
+    # --- Inhaltsstruktur (Mindmap als Gliederung) ---
+    if daten.get('struktur'):
+        story.append(Paragraph("Inhaltsstruktur", styles['WikiLensH2']))
+        unterpunkt_style = ParagraphStyle(
+            'WikiLensUnterpunkt', parent=styles['WikiLensKlein'], leftIndent=18
+        )
+        for h2 in daten['struktur']:
+            story.append(Paragraph(f"<b>&bull;</b> {esc(h2['text'])}", body_style))
+            for k in h2.get('kinder', []):
+                story.append(Paragraph(
+                    f"<font color='#888888'>&ndash;</font> {esc(k)}", unterpunkt_style
+                ))
+        story.append(Spacer(1, 8))
+
+    # --- Zeitleiste ---
+    if daten.get('zeitleiste'):
+        story.append(Paragraph("Zeitleiste", styles['WikiLensH2']))
+        for eintrag in daten['zeitleiste']:
+            story.append(Paragraph(
+                f"<b>{eintrag['jahr']}</b> — {esc(eintrag['text'])}", body_style
+            ))
+        story.append(Spacer(1, 8))
+
+    # --- Siehe auch ---
+    if daten.get('siehe_auch'):
+        story.append(Paragraph("Siehe auch", styles['WikiLensH2']))
+        for e in daten['siehe_auch']:
+            story.append(Paragraph(
+                f"<b>&bull;</b> <link href='{esc(e['url'])}' color='blue'>{esc(e['text'])}</link>",
+                body_style
+            ))
+        story.append(Spacer(1, 8))
+
+    # --- Kategorien ---
+    if daten.get('kategorien'):
+        story.append(Paragraph("Kategorien", styles['WikiLensH2']))
+        kategorien_text = " &nbsp;·&nbsp; ".join(esc(k) for k in daten['kategorien'])
+        story.append(Paragraph(kategorien_text, styles['WikiLensKlein']))
+        story.append(Spacer(1, 8))
+
+    # --- Quellen (Einzelnachweise, Literatur, Weblinks) ---
+    quellen_ueberschriften = {
+        "Einzelnachweise": "Einzelnachweise",
+        "Literatur": "Literatur",
+        "Weblinks": "Weblinks",
+    }
+    for schluessel, ueberschrift in quellen_ueberschriften.items():
+        eintraege = daten.get('quellen', {}).get(schluessel, [])
+        if not eintraege:
+            continue
+        story.append(Paragraph(ueberschrift, styles['WikiLensH2']))
+        # Bei sehr vielen Einzelnachweisen den Report nicht unlesbar lang machen
+        max_eintraege = 60 if schluessel == "Einzelnachweise" else len(eintraege)
+        for eintrag in eintraege[:max_eintraege]:
+            text = esc(eintrag["text"])
+            links = eintrag.get("links", [])
+            if links:
+                link_teile = " ".join(
+                    f"<link href='{esc(u)}' color='blue'>[Link {i+1}]</link>"
+                    for i, u in enumerate(links)
+                )
+                inhalt = f"{text} {link_teile}"
+            else:
+                inhalt = text
+            story.append(Paragraph(f"&bull; {inhalt}", styles['WikiLensKlein']))
+        if len(eintraege) > max_eintraege:
+            story.append(Paragraph(
+                f"<i>… und {len(eintraege) - max_eintraege} weitere Einträge "
+                f"(vollständige Liste in der WikiLens-Anwendung).</i>",
+                styles['WikiLensKlein']
+            ))
+        story.append(Spacer(1, 8))
+
+    # --- Zitation ---
+    story.append(Paragraph("Zitierfähige Angabe", styles['WikiLensH2']))
+    zitat = generiere_zitation(daten['titel'], daten['url'], zitierstil=zitierstil)
+    story.append(Paragraph(esc(zitat), body_style))
+    story.append(Spacer(1, 4))
+    story.append(Paragraph(
+        "Hinweis: Wikipedia gilt in vielen akademischen Kontexten nicht als "
+        "zitierfähige Primärquelle. Bitte die in „Einzelnachweise“ gelisteten "
+        "Originalquellen prüfen.",
+        styles['WikiLensMeta']
+    ))
+
+    doc.build(story)
+    puffer.seek(0)
+    return puffer.getvalue()
+
+
 st.set_page_config(page_title="WikiLens", page_icon="🧠", layout="wide")
 
 st.title("🧠 WikiLens")
@@ -496,7 +672,7 @@ if st.button("Artikel analysieren", type="primary"):
     if not nutzer_eingabe:
         st.warning("Bitte gib eine URL oder einen Suchbegriff ein!")
     else:
-        keys_to_clear = ["sprachvergleich_ergebnis", "sprachvergleich_fehler", "sprachvergleich_sprache"]
+        keys_to_clear = ["sprachvergleich_ergebnis", "sprachvergleich_fehler", "sprachvergleich_sprache", "pdf_report_bytes", "pdf_report_url"]
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
@@ -519,7 +695,36 @@ if daten is not None or fehler is not None:
         st.error(fehler)
     else:
         st.success(f"Analyse abgeschlossen für: **{daten['titel']}**")
-            
+
+        # --- PDF-Report-Export ---
+        # Zweistufig (Button -> Generieren -> Download), damit das PDF nicht bei
+        # jedem Streamlit-Rerun (z.B. durch Tab-Wechsel oder andere Widgets)
+        # unnötig neu gebaut wird. Das fertige PDF wird in session_state
+        # zwischengespeichert, gekoppelt an die analysierte URL, damit ein
+        # Wechsel zu einem neuen Artikel automatisch ein neues PDF erzwingt.
+        pdf_export_spalte1, pdf_export_spalte2 = st.columns([1, 3])
+        with pdf_export_spalte1:
+            if st.button("📑 PDF-Report erstellen", key="pdf_erstellen_btn"):
+                with st.spinner("Erstelle PDF-Report..."):
+                    pdf_stil = st.session_state.get("zitierstil_auswahl", "Harvard")
+                    pdf_bytes = erstelle_pdf_report(daten, zitierstil=pdf_stil)
+                st.session_state["pdf_report_bytes"] = pdf_bytes
+                st.session_state["pdf_report_url"] = daten["url"]
+
+        # Nur anzeigen, wenn das zwischengespeicherte PDF auch zum aktuell
+        # angezeigten Artikel gehört (sonst würde nach einem neuen Artikel
+        # fälschlich noch der alte Report zum Download angeboten)
+        if (st.session_state.get("pdf_report_bytes") and
+                st.session_state.get("pdf_report_url") == daten["url"]):
+            with pdf_export_spalte2:
+                st.download_button(
+                    "💾 Report herunterladen",
+                    data=st.session_state["pdf_report_bytes"],
+                    file_name=f"{daten['titel'].replace(' ', '_')}_WikiLens_Report.pdf",
+                    mime="application/pdf",
+                    key="pdf_download_btn"
+                )
+
         tab_mindmap, tab_zeitleiste, tab_galerie, tab_quellen, tab_info, tab_sprachen, tab_zitat, tab_text = st.tabs([
             "🗺️ Mindmap", 
             "⏱️ Zeitleiste",
