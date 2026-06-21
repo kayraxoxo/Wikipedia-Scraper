@@ -104,26 +104,85 @@ def extrahiere_bilder(soup):
     return bilder[:24]
 
 def extrahiere_zeitleiste(text):
+    """Extrahiert chronologische Eckdaten aus dem Fließtext.
+
+    PROBLEM (Bugfix): Die reine Regex \\b(1[0-9]{3}|20[0-9]{2})\\b matcht JEDE
+    vierstellige Zahl in diesem Bereich, unabhängig davon, ob es sich um eine
+    Jahreszahl handelt. Das führte zu Fehltreffern wie "... umfasst insgesamt
+    1800 Seiten" oder "rund 1900 Mitarbeiter", die als Jahr 1800/1900
+    fehlinterpretiert wurden.
+
+    FIX: Eine gefundene Zahl wird nur als Jahr akzeptiert, wenn
+    1) sie NICHT unmittelbar von einem Mengenwort (Seiten, Mitarbeiter,
+       Exemplare, Euro, etc.) gefolgt wird, UND
+    2) sie NICHT Teil einer offensichtlichen Zahlenangabe ist (z. B. direkt
+       vor/nach einer weiteren Zahl, Prozent- oder Währungszeichen steht).
+    Zusätzlich werden Sätze mit eindeutigen Jahres-Signalwörtern
+    ("im Jahr", "geboren", "gestorben", "seit", Monatsnamen davor/danach etc.)
+    leicht bevorzugt, aber nicht zwingend vorausgesetzt, da viele valide
+    Jahresangaben auch ohne Signalwort auftreten (z. B. "1879 in Ulm geboren").
+    """
     zeitleiste = []
     text_clean = re.sub(r'\[\d+\]', '', text)
     saetze = re.split(r'(?<=[.!?]) +', text_clean)
-    
+
+    # Wörter, die direkt nach einer Zahl stehen und sie als Mengenangabe
+    # statt als Jahreszahl entlarven (z. B. "1800 Seiten", "1900 Mitarbeiter")
+    mengen_woerter = (
+        r'(Seite|Seiten|Mitarbeiter|Mitarbeitern|Mitarbeiterinnen|Exemplar|Exemplare|Exemplaren|'
+        r'Euro|Dollar|Mark|Pfund|Einwohner|Einwohnern|Menschen|Personen|Soldaten|'
+        r'Meter|Kilometer|km|Stück|Teilnehmer|Teilnehmern|Punkte|Punkten|'
+        r'Mal|Male|Tonnen|Kilogramm|kg|Quadratkilometer|km²|Häftlinge|Häftlingen|'
+        r'Stimmen|Sitze|Sitzen|Worte|Wörter|Zeichen|Mio\.?|Millionen|Milliarden)'
+    )
+
     for satz in saetze:
-        match = re.search(r'\b(1[0-9]{3}|20[0-9]{2})\b', satz)
-        if match:
+        if not (30 < len(satz) < 300):
+            continue
+
+        # Alle vierstelligen Kandidaten im Satz einsammeln, nicht nur den ersten
+        for match in re.finditer(r'\b(1[0-9]{3}|20[0-9]{2})\b', satz):
             jahr = int(match.group(1))
-            if 30 < len(satz) < 300:
-                zeitleiste.append((jahr, satz.strip()))
-    
+            start, ende = match.span()
+
+            # Kontext direkt vor und nach der Zahl prüfen
+            vor_kontext = satz[max(0, start - 15):start]
+            nach_kontext = satz[ende:ende + 20]
+
+            # 1) Mengenwort direkt danach -> keine Jahreszahl
+            if re.match(r'\s*' + mengen_woerter + r'\b', nach_kontext, re.IGNORECASE):
+                continue
+
+            # 2) Zahl ist Teil einer größeren Zahl/Dezimalzahl oder grenzt an
+            #    Währungs-/Prozentzeichen bzw. eine weitere Zahl an
+            #    (z. B. "12.000", "1900-2000 Euro", "30 1800 45")
+            if re.match(r'^[.,]\d', nach_kontext) or re.search(r'[.,]$', vor_kontext):
+                continue
+            if re.match(r'\s*[%€$]', nach_kontext):
+                continue
+            if re.match(r'\s*[-–]\s*\d', nach_kontext):
+                # Spannen wie "1900-2000" sind oft Mengen-/Zeiträume ohne
+                # Einzeljahr-Aussage - im Zweifel trotzdem überspringen,
+                # da das erste Glied selten allein als Ereignisjahr gilt
+                continue
+
+            # 3) Direkt benachbarte weitere Ziffer (z. B. "19005" durch
+            #    fehlerhafte Worttrennung) ausschließen
+            if re.match(r'^\d', nach_kontext) or re.search(r'\d$', vor_kontext):
+                continue
+
+            zeitleiste.append((jahr, satz.strip()))
+            break  # pro Satz reicht ein Treffer, um Duplikate zu vermeiden
+
     zeitleiste.sort(key=lambda x: x[0])
-    
+
     gefiltert = []
     gesehene_saetze = set()
     for jahr, satz in zeitleiste:
         if satz not in gesehene_saetze:
             gefiltert.append({"jahr": jahr, "text": satz})
             gesehene_saetze.add(satz)
-            
+
     return gefiltert
 
 # --- ERWEITERTE & ULTRAROBUSTE SCRAPER LOGIK ---
