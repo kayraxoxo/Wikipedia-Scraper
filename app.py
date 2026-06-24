@@ -1061,3 +1061,18 @@ if daten is not None or fehler is not None:
             gewaehlter_stil = st.selectbox("Zitierformat", options=zitierstile, key="zitierstil_auswahl")
             zitat_text = generiere_zitation(daten['titel'], daten['url'], zitierstil=gewaehlter_stil)
             st.text_area("Generierte Zitation", value=zitat_text, height=100)
+
+# --- IMPRESSUM IN DER SIDEBAR ---
+st.sidebar.markdown("---")
+with st.sidebar.expander("⚖️ Impressum"):
+    st.markdown(
+        """
+        **Anbieter:** Kayra Ciftci  
+        Wikimetrik  
+        
+        **Kontakt / Ladungsfähige Anschrift:** c/o flexdienst – #21358  
+        Kurt-Schumacher-Straße 76  
+        67663 Kaiserslautern  
+        Deutschland  
+        """
+    )
