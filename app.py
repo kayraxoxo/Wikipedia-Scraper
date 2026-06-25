@@ -6,6 +6,7 @@ from datetime import datetime
 import urllib.parse
 import textwrap
 import re
+import streamlit_timeline
 from io import BytesIO
 from xml.sax.saxutils import escape as xml_escape
 
@@ -358,9 +359,7 @@ def scrape_wikipedia_advanced(url):
         # Sprachlinks sauber aus API JSON
         sprachlinks = {lang["lang"]: lang["url"] for lang in parse_data.get("langlinks", [])}
         
-        # Fehlende Funktion nun korrekt aufgerufen
         siehe_auch = extrahiere_siehe_auch(alle_headlinetags)
-        
         bilder_urls = extrahiere_bilder(soup)
         zeitleiste = extrahiere_zeitleiste(gesamter_text)
 
@@ -909,13 +908,31 @@ if daten is not None or fehler is not None:
                         )
 
         with tab_zeitleiste:
-            st.subheader("Chronologische Zeitleiste")
-            st.markdown("Automatisch extrahierte historische Eckdaten aus dem Text.")
+            st.subheader("⏱️ Chronologische Zeitleiste")
+            st.markdown("Automatisch extrahierte historische Eckdaten aus dem Text[cite: 267, 268].")
             if not daten['zeitleiste']:
                 st.info("Es konnten keine eindeutigen Jahreszahlen im Text gefunden werden.")
             else:
-                for eintrag in daten['zeitleiste']:
-                    st.markdown(f"**{eintrag['jahr']}** — {eintrag['text']}")
+                try:
+                    from streamlit_timeline import timeline
+                    
+                    timeline_events = []
+                    for eintrag in daten['zeitleiste']:
+                        timeline_events.append({
+                            "start_date": {"year": str(eintrag['jahr'])},
+                            "text": {
+                                "headline": str(eintrag['jahr']),
+                                "text": xml_escape(eintrag['text'])
+                            }
+                        })
+                        
+                    timeline_data = {"events": timeline_events}
+                    timeline(timeline_data, height=500)
+                    
+                except ImportError:
+                    st.warning("⚠️ Die interaktive Zeitleiste benötigt das Paket 'streamlit-timeline'. Bitte füge es zu deiner requirements.txt hinzu. Hier ist vorab die Text-Version:")
+                    for eintrag in daten['zeitleiste']:
+                        st.markdown(f"**{eintrag['jahr']}** — {eintrag['text']}")
 
         with tab_galerie:
             st.subheader("Artikel-Galerie")

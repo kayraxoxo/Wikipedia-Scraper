@@ -5,3 +5,4 @@ graphviz
 datetime
 bs4
 reportlab
+streamlit-timeline
