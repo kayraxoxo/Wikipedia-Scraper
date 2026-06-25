@@ -358,9 +358,7 @@ def scrape_wikipedia_advanced(url):
         # Sprachlinks sauber aus API JSON
         sprachlinks = {lang["lang"]: lang["url"] for lang in parse_data.get("langlinks", [])}
         
-        # Fehlende Funktion nun korrekt aufgerufen
         siehe_auch = extrahiere_siehe_auch(alle_headlinetags)
-        
         bilder_urls = extrahiere_bilder(soup)
         zeitleiste = extrahiere_zeitleiste(gesamter_text)
 
@@ -909,13 +907,60 @@ if daten is not None or fehler is not None:
                         )
 
         with tab_zeitleiste:
-            st.subheader("Chronologische Zeitleiste")
+            st.subheader("⏱️ Chronologische Zeitleiste")
             st.markdown("Automatisch extrahierte historische Eckdaten aus dem Text.")
             if not daten['zeitleiste']:
                 st.info("Es konnten keine eindeutigen Jahreszahlen im Text gefunden werden.")
             else:
+                timeline_html = """
+                <style>
+                .wiki-timeline {
+                    border-left: 3px solid var(--primary-color);
+                    padding: 0 0 0 20px;
+                    margin-left: 10px;
+                }
+                .wiki-timeline-event {
+                    margin-bottom: 25px;
+                    position: relative;
+                }
+                .wiki-timeline-event::before {
+                    content: '';
+                    width: 14px;
+                    height: 14px;
+                    background-color: var(--background-color);
+                    border: 3px solid var(--primary-color);
+                    border-radius: 50%;
+                    position: absolute;
+                    left: -28px;
+                    top: 6px;
+                }
+                .wiki-timeline-year {
+                    font-weight: 700;
+                    font-size: 1.25rem;
+                    color: var(--primary-color);
+                    margin-bottom: 4px;
+                }
+                .wiki-timeline-text {
+                    font-size: 1rem;
+                    line-height: 1.5;
+                    color: var(--text-color);
+                }
+                </style>
+                <div class="wiki-timeline">
+                """
+                
                 for eintrag in daten['zeitleiste']:
-                    st.markdown(f"**{eintrag['jahr']}** — {eintrag['text']}")
+                    jahr = eintrag['jahr']
+                    text = xml_escape(eintrag['text'])
+                    timeline_html += f"""
+                    <div class="wiki-timeline-event">
+                        <div class="wiki-timeline-year">{jahr}</div>
+                        <div class="wiki-timeline-text">{text}</div>
+                    </div>
+                    """
+                    
+                timeline_html += "</div>"
+                st.markdown(timeline_html, unsafe_allow_html=True)
 
         with tab_galerie:
             st.subheader("Artikel-Galerie")
