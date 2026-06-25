@@ -9,6 +9,10 @@ import re
 from io import BytesIO
 from xml.sax.saxutils import escape as xml_escape
 
+# --- API KONFIGURATION ---
+USER_AGENT = "WikiMetrik/1.0 (Kontakt: mein_email@domain.com)"
+WIKI_API_URL = "https://de.wikipedia.org/w/api.php"
+
 # --- INTELLIGENTE SUCHE & URL-AUFLÖSUNG ---
 def resolve_wikipedia_input(user_input):
     user_input = user_input.strip()
@@ -16,16 +20,21 @@ def resolve_wikipedia_input(user_input):
     if user_input.startswith("http://") or user_input.startswith("https://"):
         return user_input, None
     
-    suche_url = f"https://de.wikipedia.org/w/api.php?action=opensearch&search={urllib.parse.quote(user_input)}&limit=1&namespace=0&format=json"
-    headers = {"User-Agent": "MeinAdvancedStreamlitBot/1.0 (Kontakt: mein_email@domain.com)"}
+    params = {
+        "action": "opensearch",
+        "search": user_input,
+        "limit": 1,
+        "namespace": 0,
+        "format": "json"
+    }
+    headers = {"User-Agent": USER_AGENT}
     
     try:
-        response = requests.get(suche_url, headers=headers, timeout=5)
+        response = requests.get(WIKI_API_URL, params=params, headers=headers, timeout=5)
         if response.status_code == 200:
             data = response.json()
             if len(data) > 3 and data[3]:
-                gefundene_url = data[3][0]
-                return gefundene_url, None
+                return data[3][0], None
     except Exception:
         pass
         
@@ -33,7 +42,7 @@ def resolve_wikipedia_input(user_input):
 
 
 def lade_kategorie_mitglieder(kategorie_name, fortsetzung=None, anzahl=50):
-    headers = {"User-Agent": "MeinAdvancedStreamlitBot/1.0 (Kontakt: mein_email@domain.com)"}
+    headers = {"User-Agent": USER_AGENT}
     params = {
         "action": "query",
         "list": "categorymembers",
@@ -46,10 +55,7 @@ def lade_kategorie_mitglieder(kategorie_name, fortsetzung=None, anzahl=50):
         params["cmcontinue"] = fortsetzung
 
     try:
-        response = requests.get(
-            "https://de.wikipedia.org/w/api.php", params=params,
-            headers=headers, timeout=10
-        )
+        response = requests.get(WIKI_API_URL, params=params, headers=headers, timeout=10)
         if response.status_code != 200:
             return [], None, f"Status-Code {response.status_code}"
 
@@ -70,16 +76,11 @@ def lade_kategorie_mitglieder(kategorie_name, fortsetzung=None, anzahl=50):
 
 # --- FEATURE-EXTRAKTOREN (Bilder & Zeitleiste) ---
 def extrahiere_bilder(soup):
-    such_bereich = soup.find(id="mw-content-text") or soup
     bilder = []
     gesehene_urls = set()
 
-    for img in such_bereich.find_all('img'):
+    for img in soup.find_all('img'):
         src = img.get('src') or img.get('data-src')
-        if not src:
-            srcset = img.get('srcset') or img.get('data-srcset')
-            if srcset:
-                src = srcset.split(',')[0].strip().split(' ')[0]
         if not src:
             continue
 
@@ -179,7 +180,6 @@ def extrahiere_zeitleiste(text):
 
     return gefiltert
 
-# --- ERWEITERTE & ULTRAROBUSTE SCRAPER LOGIK ---
 def get_traversal_start(headline_elem):
     parent = headline_elem.parent
     if parent and parent.name == "div" and parent.get("class") and \
@@ -227,93 +227,67 @@ def extrahiere_infobox(soup):
                 daten[letzter_key] = f"{daten[letzter_key]} {zusatz}".strip()
     return daten
 
-def extrahiere_kategorien(soup):
-    catlinks = soup.find(id="catlinks")
-    if not catlinks:
-        return []
-    return [a.get_text(strip=True) for a in catlinks.find_all('a') if a.get_text(strip=True)]
-
-def extrahiere_siehe_auch(alle_headlinetags):
-    ergebnisse = []
-    gesehene_texte = set()
-    for i, headline in enumerate(alle_headlinetags):
-        h_text = headline.get_text(strip=True)
-        if "siehe auch" in h_text.lower():
-            start = get_traversal_start(headline)
-            naechste = alle_headlinetags[i + 1] if i + 1 < len(alle_headlinetags) else None
-            stop = get_traversal_start(naechste) if naechste else None
-            el = start.find_next_sibling()
-            while el and el != stop:
-                for a in el.find_all('a'):
-                    text = a.get_text(strip=True)
-                    href = a.get('href', '')
-                    if text and href.startswith('/wiki/') and ':' not in href.split('/wiki/')[-1]:
-                        if text not in gesehene_texte:
-                            voll_url = 'https://de.wikipedia.org' + href
-                            ergebnisse.append({"text": text, "url": voll_url})
-                            gesehene_texte.add(text)
-                el = el.find_next_sibling()
-    return ergebnisse
-
-def extrahiere_sprachlinks(soup):
-    sprachen = {}
-    lang_container = soup.find(id="p-lang-btn") or soup.find(id="p-lang")
-    if lang_container:
-        for li in lang_container.find_all('li'):
-            a = li.find('a')
-            if a and a.get('href') and a.get('lang'):
-                sprachen[a.get('lang')] = a.get('href')
-    return sprachen
-
+# --- HAUPT API LOGIK ---
 def scrape_wikipedia_advanced(url):
-    headers = {"User-Agent": "MeinAdvancedStreamlitBot/1.0 (Kontakt: mein_email@domain.com)"}
+    headers = {"User-Agent": USER_AGENT}
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        # Titel aus URL extrahieren für die API
+        titel_raw = urllib.parse.unquote(url.split("/wiki/")[-1])
         
-        if response.status_code == 404:
-            return None, "Link oder Begriff konnte nicht gefunden werden"
+        params = {
+            "action": "parse",
+            "page": titel_raw,
+            "prop": "text|sections|categories|langlinks",
+            "format": "json",
+            "redirects": 1
+        }
+        
+        response = requests.get(WIKI_API_URL, params=params, headers=headers, timeout=10)
+        
         if response.status_code != 200:
             return None, f"Fehler: Status-Code {response.status_code}"
+            
+        data = response.json()
+        if "error" in data:
+             return None, f"Wikipedia API Fehler: {data['error'].get('info', 'Unbekannter Fehler')}"
+             
+        parse_data = data["parse"]
+        titel = parse_data["title"]
         
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # HTML Content parsen (Sauberer API HTML Output, keine Menüs!)
+        html_content = parse_data["text"]["*"]
+        soup = BeautifulSoup(html_content, 'html.parser')
         
-        titel_element = soup.find(id="firstHeading")
-        if not titel_element:
-            return None, "Konnte den Titel der Seite nicht finden."
-        titel = titel_element.text
-        
-        such_bereich = soup.find(id="mw-content-text")
-        absaetze = such_bereich.find_all('p')
+        absaetze = soup.find_all('p')
         gesamter_text = "\n\n".join([p.text.strip() for p in absaetze if p.text.strip()])
         
+        # Struktur direkt aus dem sauberen JSON der API holen!
         ignorierte_sektionen = ["Einzelnachweise", "Literatur", "Weblinks", "Siehe auch", "Inhaltsverzeichnis", "Anmerkungen", "Weblinks und Quellen"]
         struktur = []
         aktuelle_h2 = None
         
-        alle_headlinetags = such_bereich.find_all(['h2', 'h3'])
-        
-        for elem in alle_headlinetags:
-            headline_span = elem.find(class_="mw-headline")
-            text = headline_span.text.strip() if headline_span else elem.text.replace('[Bearbeiten]', '').strip()
-            
+        for sec in parse_data.get("sections", []):
+            ebene = sec["toclevel"]
+            text = sec["line"]
             if text in ignorierte_sektionen or not text:
                 continue
                 
-            if elem.name == 'h2':
+            if ebene == 1:
                 aktuelle_h2 = text
                 struktur.append({"typ": "h2", "text": text, "kinder": []})
-            elif elem.name == 'h3' and aktuelle_h2:
-                if struktur:
-                    struktur[-1]["kinder"].append(text)
+            elif ebene == 2 and aktuelle_h2 and struktur:
+                struktur[-1]["kinder"].append(text)
 
+        # Quellen aus dem HTML extrahieren (da JSON diese nicht als Liste anbietet)
         quellen_daten = {"Einzelnachweise": [], "Literatur": [], "Weblinks": []}
+        alle_headlinetags = soup.find_all(['h2', 'h3'])
         
         for i, headline in enumerate(alle_headlinetags):
             headline_span = headline.find(class_="mw-headline")
             h_text = headline_span.text.strip() if headline_span else headline.text.strip()
             
             schluessel = None
-            if "einzelnachweis" in h_text.lower():
+            if "einzelnachweis" in h_text.lower() or "anmerkung" in h_text.lower():
                 schluessel = "Einzelnachweise"
             elif "literatur" in h_text.lower():
                 schluessel = "Literatur"
@@ -328,6 +302,9 @@ def scrape_wikipedia_advanced(url):
                 aktuelles_element = start_element.find_next_sibling()
                 while aktuelles_element and aktuelles_element != stop_element:
                     listen_eintraege = aktuelles_element.find_all('li')
+                    if not listen_eintraege and aktuelles_element.name in ['div', 'ol', 'ul']:
+                        listen_eintraege = aktuelles_element.find_all('li')
+                        
                     for li in listen_eintraege:
                         text = li.text.strip()
                         text = text.replace('↑ ', '').strip()
@@ -344,22 +321,23 @@ def scrape_wikipedia_advanced(url):
                                     links_in_eintrag.append(voll)
 
                         if text:
-                            bereits_vorhanden = any(
-                                eintrag["text"] == text for eintrag in quellen_daten[schluessel]
-                            )
+                            bereits_vorhanden = any(eintrag["text"] == text for eintrag in quellen_daten[schluessel])
                             if not bereits_vorhanden:
-                                quellen_daten[schluessel].append({
-                                    "text": text,
-                                    "links": links_in_eintrag
-                                })
+                                quellen_daten[schluessel].append({"text": text, "links": links_in_eintrag})
                     aktuelles_element = aktuelles_element.find_next_sibling()
 
+        # Metadaten direkt aus der API oder dem Content
         infobox_daten = extrahiere_infobox(soup)
         infobox_roh_gefunden = soup.find('table', class_='infobox') is not None
-        kategorien = extrahiere_kategorien(soup)
-        siehe_auch = extrahiere_siehe_auch(alle_headlinetags)
-        sprachlinks = extrahiere_sprachlinks(soup)
         
+        # Kategorien sauber aus API JSON
+        kategorien = [cat["*"] for cat in parse_data.get("categories", []) if "hidden" not in cat]
+        
+        # Sprachlinks sauber aus API JSON
+        sprachlinks = {lang["lang"]: lang["url"] for lang in parse_data.get("langlinks", [])}
+        
+        # Siehe Auch (benötigt weiterhin HTML Parsing)
+        siehe_auch = extrahiere_siehe_auch(alle_headlinetags)
         bilder_urls = extrahiere_bilder(soup)
         zeitleiste = extrahiere_zeitleiste(gesamter_text)
 
@@ -382,42 +360,40 @@ def scrape_wikipedia_advanced(url):
         return None, f"Ein Fehler ist aufgetreten: {str(e)}"
 
 def scrape_sprachversion_kompakt(url):
-    headers = {"User-Agent": "MeinAdvancedStreamlitBot/1.0 (Kontakt: mein_email@domain.com)"}
+    headers = {"User-Agent": USER_AGENT}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        titel_raw = urllib.parse.unquote(url.split("/wiki/")[-1])
+        base_api_url = "https://" + url.split("/")[2] + "/w/api.php"
+        
+        params = {
+            "action": "parse",
+            "page": titel_raw,
+            "prop": "text|sections",
+            "format": "json",
+            "redirects": 1
+        }
+        
+        response = requests.get(base_api_url, params=params, headers=headers, timeout=10)
         if response.status_code != 200:
             return None, f"Status-Code {response.status_code}"
 
-        soup = BeautifulSoup(response.text, 'html.parser')
-        titel_element = soup.find(id="firstHeading")
-        titel = titel_element.text if titel_element else "Unbekannt"
+        data = response.json()
+        if "error" in data:
+             return None, "Sprachversion konnte nicht geladen werden."
+             
+        parse_data = data["parse"]
+        titel = parse_data["title"]
+        html_content = parse_data["text"]["*"]
+        soup = BeautifulSoup(html_content, 'html.parser')
 
-        such_bereich = soup.find(id="mw-content-text")
-        if not such_bereich:
-            return None, "Kein Hauptinhalt gefunden."
-
-        absaetze = such_bereich.find_all('p')
+        absaetze = soup.find_all('p')
         gesamter_text = "\n\n".join([p.text.strip() for p in absaetze if p.text.strip()])
 
-        alle_headlinetags = such_bereich.find_all(['h2', 'h3'])
-        ueberschriften = []
-        nicht_inhalt_keywords = [
-            "reference", "einzelnachweis", "see also", "siehe auch", "external link",
-            "weblink", "literatur", "bibliography", "further reading", "notes",
-            "anmerkung", "source", "quelle", "citation", "footnote"
-        ]
-
-        def ist_inhaltsabschnitt(text):
-            return not any(kw in text.lower() for kw in nicht_inhalt_keywords)
-
-        for elem in alle_headlinetags:
-            headline_span = elem.find(class_="mw-headline")
-            text = headline_span.text.strip() if headline_span else elem.text.replace('[edit]', '').strip()
-            if text and ist_inhaltsabschnitt(text):
-                ueberschriften.append({"ebene": elem.name, "text": text})
+        # Abschnitte direkt aus API JSON
+        ueberschriften = [{"ebene": "h2", "text": sec["line"]} for sec in parse_data.get("sections", []) if sec["toclevel"] == 1]
 
         anzahl_quellen = 0
-        ref_container = such_bereich.find_all(class_=["reflist", "references"])
+        ref_container = soup.find_all(class_=["reflist", "references"])
         oberste_container = [
             c for c in ref_container
             if not any(c in anderer.find_all(class_=["reflist", "references"]) for anderer in ref_container if anderer is not c)
@@ -428,7 +404,7 @@ def scrape_sprachversion_kompakt(url):
         return {
             "titel": titel,
             "wortanzahl": len(gesamter_text.split()),
-            "anzahl_abschnitte": len([h for h in ueberschriften if h["ebene"] == "h2"]),
+            "anzahl_abschnitte": len(ueberschriften),
             "ueberschriften": ueberschriften,
             "anzahl_quellen": anzahl_quellen
         }, None
@@ -479,7 +455,7 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
     doc = SimpleDocTemplate(
         puffer, pagesize=A4,
         leftMargin=2*cm, rightMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm,
-        title=daten['titel'], author="WikiLens"
+        title=daten['titel'], author="WikiMetrik"
     )
 
     styles = getSampleStyleSheet()
@@ -510,7 +486,7 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
     story.append(Paragraph(esc(daten['titel']), styles['WikiLensTitel']))
     heute_str = datetime.now().strftime("%d.%m.%Y, %H:%M Uhr")
     story.append(Paragraph(
-        f"WikiLens-Analysereport &middot; Quelle: "
+        f"WikiMetrik-Analysereport &middot; Quelle: "
         f"<link href='{esc(daten['url'])}' color='blue'>{esc(daten['url'])}</link> "
         f"&middot; erstellt am {heute_str}",
         styles['WikiLensMeta']
@@ -598,7 +574,7 @@ def erstelle_pdf_report(daten, zitierstil="Harvard"):
         if len(eintraege) > max_eintraege:
             story.append(Paragraph(
                 f"<i>… und {len(eintraege) - max_eintraege} weitere Einträge "
-                f"(vollständige Liste in der WikiLens-Anwendung).</i>",
+                f"(vollständige Liste in der WikiMetrik-Anwendung).</i>",
                 styles['WikiLensKlein']
             ))
         story.append(Spacer(1, 8))
@@ -632,7 +608,7 @@ def erstelle_text_pdf(titel, text, url):
     doc = SimpleDocTemplate(
         puffer, pagesize=A4,
         leftMargin=2.5*cm, rightMargin=2.5*cm, topMargin=2.5*cm, bottomMargin=2.5*cm,
-        title=titel, author="WikiLens"
+        title=titel, author="WikiMetrik"
     )
 
     styles = getSampleStyleSheet()
@@ -655,9 +631,9 @@ def erstelle_text_pdf(titel, text, url):
     return puffer.getvalue()
 
 
-st.set_page_config(page_title="WikiLens", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="WikiMetrik", page_icon="🧠", layout="wide")
 
-st.title("🧠 WikiLens")
+st.title("🧠 WikiMetrik")
 st.markdown("Suche nach einem Thema oder gib einen Link ein, um die Architektur des Artikels zu analysieren.")
 
 if "nutzer_eingabe_pending" in st.session_state:
@@ -685,7 +661,7 @@ def fuehre_analyse_aus(eingabe):
         if key in st.session_state:
             del st.session_state[key]
 
-    with st.spinner("Suche und analysiere Artikel..."):
+    with st.spinner("Frage offizielle Wikipedia-API an..."):
         aufgeloeste_url, such_fehler = resolve_wikipedia_input(eingabe)
         if such_fehler:
             daten, fehler = None, such_fehler
@@ -728,7 +704,7 @@ if daten is not None or fehler is not None:
                 st.download_button(
                     "💾 Report herunterladen",
                     data=st.session_state["pdf_report_bytes"],
-                    file_name=f"{daten['titel'].replace(' ', '_')}_WikiLens_Report.pdf",
+                    file_name=f"{daten['titel'].replace(' ', '_')}_WikiMetrik_Report.pdf",
                     mime="application/pdf",
                     key="pdf_download_btn"
                 )
@@ -1067,8 +1043,7 @@ st.markdown("---")
 with st.expander("⚖️ Impressum"):
     st.markdown(
         """
-        **Angaben gemäß § 5 TMG:** 
-        Kayra Ciftci  
+        **Angaben gemäß § 5 TMG:** Kayra Ciftci  
         Wikimetrik.com
         
         c/o flexdienst – #21358  
