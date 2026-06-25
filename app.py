@@ -74,7 +74,7 @@ def lade_kategorie_mitglieder(kategorie_name, fortsetzung=None, anzahl=50):
     except Exception as e:
         return [], None, f"Fehler beim Laden der Kategorie: {str(e)}"
 
-# --- FEATURE-EXTRAKTOREN (Bilder & Zeitleiste) ---
+# --- FEATURE-EXTRAKTOREN ---
 def extrahiere_bilder(soup):
     bilder = []
     gesehene_urls = set()
@@ -227,6 +227,28 @@ def extrahiere_infobox(soup):
                 daten[letzter_key] = f"{daten[letzter_key]} {zusatz}".strip()
     return daten
 
+def extrahiere_siehe_auch(alle_headlinetags):
+    ergebnisse = []
+    gesehene_texte = set()
+    for i, headline in enumerate(alle_headlinetags):
+        h_text = headline.get_text(strip=True)
+        if "siehe auch" in h_text.lower():
+            start = get_traversal_start(headline)
+            naechste = alle_headlinetags[i + 1] if i + 1 < len(alle_headlinetags) else None
+            stop = get_traversal_start(naechste) if naechste else None
+            el = start.find_next_sibling()
+            while el and el != stop:
+                for a in el.find_all('a'):
+                    text = a.get_text(strip=True)
+                    href = a.get('href', '')
+                    if text and href.startswith('/wiki/') and ':' not in href.split('/wiki/')[-1]:
+                        if text not in gesehene_texte:
+                            voll_url = 'https://de.wikipedia.org' + href
+                            ergebnisse.append({"text": text, "url": voll_url})
+                            gesehene_texte.add(text)
+                el = el.find_next_sibling()
+    return ergebnisse
+
 # --- HAUPT API LOGIK ---
 def scrape_wikipedia_advanced(url):
     headers = {"User-Agent": USER_AGENT}
@@ -278,7 +300,7 @@ def scrape_wikipedia_advanced(url):
             elif ebene == 2 and aktuelle_h2 and struktur:
                 struktur[-1]["kinder"].append(text)
 
-        # Quellen aus dem HTML extrahieren (da JSON diese nicht als Liste anbietet)
+        # Quellen und Siehe Auch aus dem HTML extrahieren 
         quellen_daten = {"Einzelnachweise": [], "Literatur": [], "Weblinks": []}
         alle_headlinetags = soup.find_all(['h2', 'h3'])
         
@@ -326,7 +348,7 @@ def scrape_wikipedia_advanced(url):
                                 quellen_daten[schluessel].append({"text": text, "links": links_in_eintrag})
                     aktuelles_element = aktuelles_element.find_next_sibling()
 
-        # Metadaten direkt aus der API oder dem Content
+        # Metadaten aus API / Content
         infobox_daten = extrahiere_infobox(soup)
         infobox_roh_gefunden = soup.find('table', class_='infobox') is not None
         
@@ -336,8 +358,9 @@ def scrape_wikipedia_advanced(url):
         # Sprachlinks sauber aus API JSON
         sprachlinks = {lang["lang"]: lang["url"] for lang in parse_data.get("langlinks", [])}
         
-        # Siehe Auch (benötigt weiterhin HTML Parsing)
+        # Fehlende Funktion nun korrekt aufgerufen
         siehe_auch = extrahiere_siehe_auch(alle_headlinetags)
+        
         bilder_urls = extrahiere_bilder(soup)
         zeitleiste = extrahiere_zeitleiste(gesamter_text)
 
