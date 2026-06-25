@@ -358,7 +358,9 @@ def scrape_wikipedia_advanced(url):
         # Sprachlinks sauber aus API JSON
         sprachlinks = {lang["lang"]: lang["url"] for lang in parse_data.get("langlinks", [])}
         
+        # Fehlende Funktion nun korrekt aufgerufen
         siehe_auch = extrahiere_siehe_auch(alle_headlinetags)
+        
         bilder_urls = extrahiere_bilder(soup)
         zeitleiste = extrahiere_zeitleiste(gesamter_text)
 
@@ -789,7 +791,7 @@ if daten is not None or fehler is not None:
         tab_mindmap, tab_text, tab_zeitleiste, tab_galerie, tab_quellen, tab_info, tab_sprachen, tab_zitat = st.tabs([
             "🗺️ Mindmap", 
             "📄 Text",
-            "⏳ Zeitleiste",
+            "⏱️ Zeitleiste",
             "🖼️ Galerie",
             "📚 Quellen", 
             "ℹ️ Übersicht",
@@ -907,78 +909,13 @@ if daten is not None or fehler is not None:
                         )
 
         with tab_zeitleiste:
-            st.subheader("⏳ Chronologischer Überblick")
-            st.markdown(
-                "Eine Übersicht geschichtlicher Ereignisse und Jahreszahlen, "
-                "die im Artikel identifiziert wurden."
-            )
-
-            if daten['zeitleiste']:
-                try:
-                    sortierte_events = sorted(daten["zeitleiste"], key=lambda x: int(re.sub(r"\D", "", str(x["jahr"])) or 0))
-                except Exception:
-                    sortierte_events = daten["zeitleiste"]
-
-                st.markdown("""
-                    <style>
-                    .timeline-container {
-                        border-left: 3px solid var(--primary-color, #FF4B4B);
-                        padding-left: 20px;
-                        margin-left: 10px;
-                        margin-top: 15px;
-                    }
-                    .timeline-item {
-                        position: relative;
-                        margin-bottom: 25px;
-                    }
-                    .timeline-item::before {
-                        content: '';
-                        position: absolute;
-                        left: -27px;
-                        top: 5px;
-                        width: 12px;
-                        height: 12px;
-                        border-radius: 50%;
-                        background-color: var(--background-color, #ffffff);
-                        border: 3px solid var(--primary-color, #FF4B4B);
-                    }
-                    .timeline-badge {
-                        display: inline-block;
-                        background-color: var(--primary-color, #FF4B4B);
-                        color: white;
-                        padding: 3px 10px;
-                        border-radius: 12px;
-                        font-weight: bold;
-                        font-size: 0.85em;
-                        margin-bottom: 5px;
-                    }
-                    .timeline-card {
-                        background-color: var(--secondary-background-color, #f0f2f6);
-                        padding: 15px;
-                        border-radius: 8px;
-                        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-                    }
-                    </style>
-                """, unsafe_allow_html=True)
-
-                st.markdown('<div class="timeline-container">', unsafe_allow_html=True)
-                
-                for event in sortierte_events:
-                    jahr = xml_escape(str(event.get('jahr', 'Unbekannt')))
-                    text = xml_escape(str(event.get('text', '')))
-                    
-                    st.markdown(f"""
-                        <div class="timeline-item">
-                            <div class="timeline-badge">{jahr}</div>
-                            <div class="timeline-card">
-                                {text}
-                            </div>
-                        </div>
-                    """, unsafe_allow_html=True)
-                    
-                st.markdown('</div>', unsafe_allow_html=True)
+            st.subheader("Chronologische Zeitleiste")
+            st.markdown("Automatisch extrahierte historische Eckdaten aus dem Text.")
+            if not daten['zeitleiste']:
+                st.info("Es konnten keine eindeutigen Jahreszahlen im Text gefunden werden.")
             else:
-                st.info("Für diesen Artikel konnten keine eindeutigen historischen Jahreszahlen extrahiert werden.")
+                for eintrag in daten['zeitleiste']:
+                    st.markdown(f"**{eintrag['jahr']}** — {eintrag['text']}")
 
         with tab_galerie:
             st.subheader("Artikel-Galerie")
