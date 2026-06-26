@@ -817,7 +817,7 @@ if daten is not None or fehler is not None:
                     # Feste width/height-Attribute entfernen und SVG responsiv machen
                     svg_str = _re.sub(r'(<svg[^>]*?) width="[^"]*"', r'\1', svg_str)
                     svg_str = _re.sub(r'(<svg[^>]*?) height="[^"]*"', r'\1', svg_str)
-                    svg_str = _re.sub(r'(<svg)', r'\1 style="width:25%;height:auto;display:block;margin:0 auto;"', svg_str, count=1)
+                    svg_str = _re.sub(r'(<svg)', r'\1 style="width:35%;height:auto;display:block;margin:0 auto;"', svg_str, count=1)
                     st.components.v1.html(
                         f'<div style="overflow:auto; width:100%;">{svg_str}</div>',
                         height=550,
