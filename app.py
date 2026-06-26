@@ -714,7 +714,11 @@ if daten is not None or fehler is not None:
     if fehler:
         st.error(fehler)
     else:
-        st.success(f"Analyse abgeschlossen für: **{daten['titel']}**")
+        st.markdown(
+            f"✅ Analyse abgeschlossen für: "
+            f"**<a href='{daten['url']}' target='_blank' style='color: inherit;'>{daten['titel']}</a>**",
+            unsafe_allow_html=True
+        )
 
         pdf_export_spalte1, pdf_export_spalte2 = st.columns([1, 3])
         with pdf_export_spalte1:
