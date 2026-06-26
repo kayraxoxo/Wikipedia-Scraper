@@ -55,6 +55,34 @@ def fetch_search_suggestions(query, lang="de"):
         pass
     return []
 
+# Live-Suche speziell für Kategorien (Namespace 14)
+def fetch_category_live(query: str):
+    if not query or len(query.strip()) < 2:
+        return []
+    
+    lang = st.session_state.get("gewaehlte_sprache_code", "de")
+    api_url = f"https://{lang}.wikipedia.org/w/api.php"
+    params = {
+        "action": "opensearch",
+        "search": query.strip(),
+        "limit": 15,
+        "namespace": 14, # Namespace 14 = Kategorien
+        "format": "json"
+    }
+    try:
+        res = requests.get(api_url, params=params, headers={"User-Agent": USER_AGENT}, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            results = []
+            for title in data[1]:
+                # Präfix "Kategorie:" für die saubere Dropdown-Anzeige entfernen
+                display_name = title.split(":", 1)[-1] if ":" in title else title
+                results.append((display_name, title)) # (Anzeige, API-Wert)
+            return results
+    except Exception:
+        pass
+    return []
+
 def lade_kategorie_mitglieder(kategorie_name, lang="de", fortsetzung=None, anzahl=50):
     api_url = f"https://{lang}.wikipedia.org/w/api.php"
     headers = {"User-Agent": USER_AGENT}
@@ -600,7 +628,14 @@ with st.sidebar:
     
     st.markdown("---")
     st.subheader("🗂️ Kategorie-Browser")
-    kat_eingabe = st.text_input("Wikipedia-Kategorie", placeholder="z. B. 'Quantenphysik'")
+    
+    # Live-Suche (st_searchbox) speziell für Kategorien
+    kat_eingabe = st_searchbox(
+        fetch_category_live,
+        key="wiki_kat_live_search",
+        placeholder="Kategorie suchen (z.B. Physik)...",
+        clear_on_submit=False
+    )
     
     if kat_eingabe:
         kat_name_clean = kat_eingabe.strip()
@@ -626,6 +661,11 @@ with st.sidebar:
             ausgewaehlte_kat_seite = st.selectbox("Artikel wählen", options=[m["titel"] for m in st.session_state["kat_seiten_liste"]])
             if st.button("Diesen Artikel analysieren"):
                 gewaehlte_url = next(m["url"] for m in st.session_state["kat_seiten_liste"] if m["titel"] == ausgewaehlte_kat_seite)
+                
+                # Der Fix: Wir rufen die Analyse hier direkt auf, statt sie an die Searchbox zu übergeben!
+                fuehre_analyse_aus(gewaehlte_url)
+                
+                # Für den visuellen Abgleich in der Hauptsuchbox 
                 st.session_state["nutzer_eingabe_pending"] = gewaehlte_url
                 st.rerun()
 
