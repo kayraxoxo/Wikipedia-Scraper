@@ -603,6 +603,8 @@ if "letzte_suche" not in st.session_state:
     st.session_state["letzte_suche"] = None
 if "gewaehlte_sprache_code" not in st.session_state:
     st.session_state["gewaehlte_sprache_code"] = "de"
+if "search_reset_counter" not in st.session_state:
+    st.session_state["search_reset_counter"] = 0
 
 def fuehre_analyse_aus(eingabe_url):
     keys_to_clear = [
@@ -622,6 +624,15 @@ def fuehre_analyse_aus(eingabe_url):
 
     # URL-Parameter setzen, damit die Analyse teilbar/speicherbar ist
     st.query_params["url"] = eingabe_url
+
+# --- HOME RESET ---
+if st.session_state.pop("home_reset", False):
+    st.query_params.clear()
+    st.session_state["daten"] = None
+    st.session_state["fehler"] = None
+    st.session_state["letzte_suche"] = None
+    st.session_state["nutzer_eingabe_pending"] = ""
+    st.session_state["search_reset_counter"] = st.session_state.get("search_reset_counter", 0) + 1
 
 # --- AUTOSTART AUS URL-PARAMETER ---
 _url_param = st.query_params.get("url")
@@ -684,10 +695,7 @@ with home_col:
     if st.query_params.get("url"):
         st.markdown("<div style='padding-top: 18px;'>", unsafe_allow_html=True)
         if st.button("🏠 Home", use_container_width=True, help="Zurück zur Startseite"):
-            st.query_params.clear()
-            st.session_state["daten"] = None
-            st.session_state["fehler"] = None
-            st.session_state["letzte_suche"] = None
+            st.session_state["home_reset"] = True
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 st.markdown("Suche nach einem Thema oder gib direkt einen Wikipedia-Link ein.")
@@ -710,10 +718,11 @@ initial_search_value = ""
 if "nutzer_eingabe_pending" in st.session_state:
     initial_search_value = st.session_state.pop("nutzer_eingabe_pending")
 
+_search_key = f"wiki_live_search_{st.session_state.get('search_reset_counter', 0)}"
 nutzer_eingabe = st_searchbox(
     fetch_search_live,
     default=initial_search_value,
-    key="wiki_live_search",
+    key=_search_key,
     placeholder="Z. B. 'Albert Einstein' eintippen oder kompletten Wikipedia-Link einfügen...",
     clear_on_submit=False
 )
