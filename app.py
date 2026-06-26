@@ -814,9 +814,13 @@ if daten is not None or fehler is not None:
                     svg_str = svg_bytes.decode('utf-8')
                     import re as _re
                     svg_str = _re.sub(r'(<a\b)([^>]*?>)', lambda m: m.group(1) + ' target="_blank"' + m.group(2) if 'target=' not in m.group(0) else m.group(0), svg_str)
+                    # Feste width/height-Attribute entfernen und SVG responsiv machen
+                    svg_str = _re.sub(r'(<svg[^>]*?) width="[^"]*"', r'\1', svg_str)
+                    svg_str = _re.sub(r'(<svg[^>]*?) height="[^"]*"', r'\1', svg_str)
+                    svg_str = _re.sub(r'(<svg)', r'\1 style="width:75%;height:auto;display:block;margin:0 auto;"', svg_str, count=1)
                     st.components.v1.html(
                         f'<div style="overflow:auto; width:100%;">{svg_str}</div>',
-                        height=600,
+                        height=550,
                         scrolling=True
                     )
                 except Exception:
