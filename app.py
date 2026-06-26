@@ -636,26 +636,6 @@ if daten is not None or fehler is not None:
     else:
         st.success(f"Analyse abgeschlossen für: **{daten['titel']}**")
 
-        wikimetrik_url = "https://wikilens.streamlit.app/"  # Hier die URL zu WikiMetrik einfügen
-        st.markdown(
-            f"""<div style="
-                position: sticky; top: 0; z-index: 999;
-                background: #1a1a2e; color: white;
-                padding: 10px 20px; border-radius: 8px;
-                margin-bottom: 12px;
-                display: flex; align-items: center; justify-content: space-between;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-            ">
-                <span style="font-size:0.95rem;">📌 Du verlässt WikiMetrik? Klicke hier, um zur Analyse zurückzukehren.</span>
-                <a href="{wikimetrik_url}" style="
-                    background: #FF4B4B; color: white; text-decoration: none;
-                    padding: 6px 16px; border-radius: 6px; font-weight: bold; font-size: 0.9rem;
-                    margin-left: 16px; white-space: nowrap;
-                ">🧠 Zurück zu WikiMetrik</a>
-            </div>""",
-            unsafe_allow_html=True
-        )
-
         pdf_export_spalte1, pdf_export_spalte2 = st.columns([1, 3])
         with pdf_export_spalte1:
             if st.button("📑 PDF-Report erstellen", key="pdf_erstellen_btn"):
@@ -774,7 +754,18 @@ if daten is not None or fehler is not None:
                         dot.node(h3_id, wrap_fuer_mindmap(h3, breite=18), shape='plaintext', URL=h3_url)
                         dot.edge(h2_id, h3_id)
                 
-                st.graphviz_chart(dot)
+                try:
+                    svg_bytes = dot.pipe(format='svg')
+                    svg_str = svg_bytes.decode('utf-8')
+                    import re as _re
+                    svg_str = _re.sub(r'(<a\b)([^>]*?>)', lambda m: m.group(1) + ' target="_blank"' + m.group(2) if 'target=' not in m.group(0) else m.group(0), svg_str)
+                    st.components.v1.html(
+                        f'<div style="overflow:auto; width:100%;">{svg_str}</div>',
+                        height=600,
+                        scrolling=True
+                    )
+                except Exception:
+                    st.graphviz_chart(dot)
 
                 st.divider()
                 st.markdown("#### 💾 Mindmap exportieren")
