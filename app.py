@@ -620,6 +620,15 @@ def fuehre_analyse_aus(eingabe_url):
         st.session_state["fehler"] = fehler
         st.session_state["letzte_suche"] = eingabe_url
 
+    # URL-Parameter setzen, damit die Analyse teilbar/speicherbar ist
+    st.query_params["url"] = eingabe_url
+
+# --- AUTOSTART AUS URL-PARAMETER ---
+_url_param = st.query_params.get("url")
+if _url_param and st.session_state.get("letzte_suche") != _url_param:
+    fuehre_analyse_aus(_url_param)
+    st.session_state["nutzer_eingabe_pending"] = _url_param
+
 # --- SEITENLEISTE (Sprache & Kategorien) ---
 with st.sidebar:
     st.header("⚙️ Einstellungen")
