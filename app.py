@@ -816,22 +816,14 @@ if daten is not None or fehler is not None:
                     svg_str = _re.sub(r'(<a\b)([^>]*?>)', lambda m: m.group(1) + ' target="_blank"' + m.group(2) if 'target=' not in m.group(0) else m.group(0), svg_str)
                     # Originalhöhe auslesen für dynamische iframe-Höhe
                     _hm = _re.search(r'<svg[^>]*? height="([^"]*)"', svg_str)
-                    _wm = _re.search(r'<svg[^>]*? width="([^"]*)"', svg_str)
                     try:
-                        _svg_h = float(_hm.group(1).replace('pt','')) * 1.35 if _hm else 600
-                        _svg_w = float(_wm.group(1).replace('pt','')) * 1.35 if _wm else None
-                        # Breite auf 75% skalieren → Höhe proportional anpassen
-                        _iframe_h = int(_svg_h * 0.75) + 40 if _svg_w else int(_svg_h) + 40
+                        _iframe_h = int(float(_hm.group(1).replace('pt', '')) * 1.35) + 40 if _hm else 600
                     except Exception:
                         _iframe_h = 600
-                    # Feste width/height-Attribute entfernen und SVG responsiv machen
-                    svg_str = _re.sub(r'(<svg[^>]*?) width="[^"]*"', r'\1', svg_str)
-                    svg_str = _re.sub(r'(<svg[^>]*?) height="[^"]*"', r'\1', svg_str)
-                    svg_str = _re.sub(r'(<svg)', r'\1 style="width:75%;height:auto;display:block;margin:0 auto;"', svg_str, count=1)
                     st.components.v1.html(
                         f'<div style="overflow:auto; width:100%;">{svg_str}</div>',
                         height=_iframe_h,
-                        scrolling=False
+                        scrolling=True
                     )
                 except Exception:
                     st.graphviz_chart(dot)
