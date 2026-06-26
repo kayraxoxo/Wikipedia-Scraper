@@ -35,7 +35,7 @@ def fetch_search_suggestions(query, lang="de"):
     params = {
         "action": "opensearch",
         "search": query,
-        "limit": 35,
+        "limit": 15,
         "namespace": 0,
         "format": "json"
     }
@@ -735,7 +735,7 @@ if daten is not None or fehler is not None:
                 dot.attr(target='_blank')
                 
                 dot.node('Haupt', wrap_fuer_mindmap(daten['titel'], breite=25), 
-                         style='filled', color='lightblue', shape='ellipse', URL=daten['url'], target='_blank')
+                         style='filled', color='lightblue', shape='ellipse', URL=daten['url'])
                     
                 for i, h2 in enumerate(daten['struktur']):
                     h2_id = f"h2_{i}"
@@ -743,7 +743,7 @@ if daten is not None or fehler is not None:
                     h2_url = f"{daten['url']}#{h2_anker}"
                     
                     dot.node(h2_id, wrap_fuer_mindmap(h2['text'], breite=20), 
-                             style='filled', color='lightgray', shape='box', URL=h2_url, target='_blank')
+                             style='filled', color='lightgray', shape='box', URL=h2_url)
                     dot.edge('Haupt', h2_id)
                     
                     for j, h3 in enumerate(h2['kinder']):
@@ -751,7 +751,7 @@ if daten is not None or fehler is not None:
                         h3_anker = urllib.parse.quote(h3.replace(' ', '_'))
                         h3_url = f"{daten['url']}#{h3_anker}"
                         
-                        dot.node(h3_id, wrap_fuer_mindmap(h3, breite=18), shape='plaintext', URL=h3_url, target='_blank')
+                        dot.node(h3_id, wrap_fuer_mindmap(h3, breite=18), shape='plaintext', URL=h3_url)
                         dot.edge(h2_id, h3_id)
                 
                 st.graphviz_chart(dot)
