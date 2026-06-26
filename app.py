@@ -677,7 +677,19 @@ with st.sidebar:
                 st.rerun()
 
 # --- HAUPTBEREICH (Live Suche) ---
-st.title("🧠 WikiMetrik")
+titel_col, home_col = st.columns([9, 1])
+with titel_col:
+    st.title("🧠 WikiMetrik")
+with home_col:
+    if st.query_params.get("url"):
+        st.markdown("<div style='padding-top: 18px;'>", unsafe_allow_html=True)
+        if st.button("🏠 Home", use_container_width=True, help="Zurück zur Startseite"):
+            st.query_params.clear()
+            st.session_state["daten"] = None
+            st.session_state["fehler"] = None
+            st.session_state["letzte_suche"] = None
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 st.markdown("Suche nach einem Thema oder gib direkt einen Wikipedia-Link ein.")
 
 def fetch_search_live(query: str):
