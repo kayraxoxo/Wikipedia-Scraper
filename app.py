@@ -671,11 +671,9 @@ with st.sidebar:
             if st.button("Diesen Artikel analysieren"):
                 gewaehlte_url = next(m["url"] for m in st.session_state["kat_seiten_liste"] if m["titel"] == ausgewaehlte_kat_seite)
                 
-                # Der Fix: Wir rufen die Analyse hier direkt auf, statt sie an die Searchbox zu übergeben!
-                fuehre_analyse_aus(gewaehlte_url)
-                
-                # Für den visuellen Abgleich in der Hauptsuchbox 
-                st.session_state["nutzer_eingabe_pending"] = gewaehlte_url
+                # letzte_suche zurücksetzen, damit der Autostart-Block die Analyse neu auslöst
+                st.session_state["letzte_suche"] = None
+                st.query_params["url"] = gewaehlte_url
                 st.rerun()
 
 # --- HAUPTBEREICH (Live Suche) ---
